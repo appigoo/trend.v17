@@ -335,8 +335,8 @@ def build_chart(symbol, df, interval_label, compact=False, max_bars=90):
     # K 線
     fig.add_trace(go.Candlestick(
         x=xlabels, open=df["Open"], high=df["High"], low=df["Low"], close=close,
-        increasing_line_color="#ff4444", increasing_fillcolor="#ff4444",
-        decreasing_line_color="#00cc44", decreasing_fillcolor="#00cc44",
+        increasing_line_color="#00cc44", increasing_fillcolor="#00cc44",
+        decreasing_line_color="#ff4444", decreasing_fillcolor="#ff4444",
         name="K線", showlegend=False,
     ), row=1, col=1)
 
@@ -379,13 +379,13 @@ def build_chart(symbol, df, interval_label, compact=False, max_bars=90):
         row=1, col=1)
     fig.add_annotation(x=xlabels[min_pos], y=float(df["Low"].min()),
         text=f"▼ {df['Low'].min():.2f}", showarrow=True,
-        arrowhead=2, arrowcolor="#00cc44", arrowwidth=2,
-        font=dict(color="#88ffaa", size=11, family="Arial Black"),
-        bgcolor="rgba(10,30,10,0.85)", bordercolor="#00cc44", borderwidth=1,
+        arrowhead=2, arrowcolor="#ff4444", arrowwidth=2,
+        font=dict(color="#ff8888", size=11, family="Arial Black"),
+        bgcolor="rgba(30,10,10,0.85)", bordercolor="#ff4444", borderwidth=1,
         row=1, col=1)
 
     # ── 成交量 ──────────────────────────────────────────────────────────────
-    col_vol = ["#ff4444" if c >= o else "#00cc44"
+    col_vol = ["#00cc44" if c >= o else "#ff4444"
                for c, o in zip(df["Close"], df["Open"])]
     fig.add_trace(go.Bar(x=xlabels, y=vol, marker_color=col_vol,
                          name="成交量", showlegend=False), row=2, col=1)
