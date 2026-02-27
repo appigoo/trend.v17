@@ -1,244 +1,418 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import plotly.graph_objects as go
 import numpy as np
-import requests
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from datetime import datetime, timedelta
 import time
-import io
-from scipy.signal import argrelextrema
+import requests
+import csv
+import os
+import json
 
-# 設定頁面配置
-st.set_page_config(page_title="美股實時監控系統", layout="wide")
+# ── 頁面設定 ──────────────────────────────────────────────────────────────────
+st.set_page_config(
+    page_title="美股即時監控系統",
+    page_icon="📈",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
-# 標題
-st.title("美股實時監控系統")
+# ── CSS 美化 ──────────────────────────────────────────────────────────────────
+st.markdown("""
+<style>
+    .block-container { padding-top: 1rem; }
+    .stMetric { background: #1e1e2e; border-radius: 8px; padding: 8px; }
+    .alert-box { padding: 10px 14px; border-radius: 6px; margin: 4px 0; font-size: 0.85rem; }
+    .alert-bull { background: #1a3a1a; border-left: 4px solid #00cc44; color: #80ff99; }
+    .alert-bear { background: #3a1a1a; border-left: 4px solid #ff3333; color: #ff9999; }
+    .alert-vol  { background: #1a2a3a; border-left: 4px solid #3399ff; color: #99ccff; }
+    .alert-info { background: #2a2a1a; border-left: 4px solid #ffcc00; color: #ffeeaa; }
+    .trend-bull { color: #00cc44; font-weight: bold; font-size: 1.2rem; }
+    .trend-bear { color: #ff3333; font-weight: bold; font-size: 1.2rem; }
+    .trend-side { color: #ffcc00; font-weight: bold; font-size: 1.2rem; }
+</style>
+""", unsafe_allow_html=True)
 
-# 側邊欄
-st.sidebar.header("設定")
-symbols_input = st.sidebar.text_input("股票代號（多個用逗號分隔，如 TSLA,NIO）", value="TSLA")
-interval = st.sidebar.selectbox("時間週期", options=["1m", "5m", "15m", "30m", "1d", "1wk", "1mo"])
-auto_refresh = st.sidebar.checkbox("自動刷新", value=True)
-refresh_interval = st.sidebar.slider("刷新間隔（秒）", min_value=60, max_value=300, value=60)
+# ── 常數設定 ──────────────────────────────────────────────────────────────────
+INTERVAL_MAP = {
+    "1分鐘": "1m", "5分鐘": "5m", "15分鐘": "15m", "30分鐘": "30m",
+    "日K": "1d", "週K": "1wk", "月K": "1mo"
+}
+PERIOD_MAP = {
+    "1m": "1d", "5m": "5d", "15m": "10d", "30m": "30d",
+    "1d": "1y", "1wk": "3y", "1mo": "5y"
+}
+EMA_CONFIGS = [
+    (5,   "#00ff88"), (10,  "#ccff00"), (20,  "#ffaa00"),
+    (30,  "#ff5500"), (40,  "#cc00ff"), (60,  "#0088ff"),
+    (120, "#00ccff"), (200, "#8866ff"),
+]
+MA_CONFIGS = [(5, "#ffffff", "dash"), (15, "#ffdd66", "dot")]
 
-# 額外參數
-n_pivots = 100  # 用於支撐阻力的近N根K線
-vol_multiplier = 2  # 成交量放大倍數
-vol_ma_period = 5  # 均量期數
-
-# Telegram 設定
-telegram_token = st.secrets.get("TELEGRAM_BOT_TOKEN", None)
-telegram_chat_id = st.secrets.get("TELEGRAM_CHAT_ID", None)
-
-def send_telegram_message(message):
-    if telegram_token and telegram_chat_id:
-        url = f"https://api.telegram.org/bot{telegram_token}/sendMessage"
-        payload = {"chat_id": telegram_chat_id, "text": message}
-        try:
-            requests.post(url, json=payload)
-        except:
-            pass
-
-# 警示紀錄
+# ── 警示記錄 (session state) ─────────────────────────────────────────────────
 if "alert_log" not in st.session_state:
     st.session_state.alert_log = []
-if "last_alerts" not in st.session_state:
-    st.session_state.last_alerts = {}
+if "sent_alerts" not in st.session_state:
+    st.session_state.sent_alerts = set()
 
-# 解析多股票
-symbols = [s.strip().upper() for s in symbols_input.split(",") if s.strip()]
+# ── Telegram 發送 ─────────────────────────────────────────────────────────────
+def send_telegram(msg: str):
+    try:
+        token   = st.secrets["TELEGRAM_BOT_TOKEN"]
+        chat_id = st.secrets["TELEGRAM_CHAT_ID"]
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        requests.post(url, data={"chat_id": chat_id, "text": msg, "parse_mode": "HTML"}, timeout=5)
+    except Exception:
+        pass  # secrets 未設定時靜默忽略
 
-# 趨勢判斷函數
-def determine_trend(emas):
-    if all(emas.diff().dropna() > 0):
-        return "多頭"
-    elif all(emas.diff().dropna() < 0):
-        return "空頭"
-    else:
+def add_alert(symbol: str, msg: str, atype: str = "info"):
+    now = datetime.now().strftime("%H:%M:%S")
+    entry = {"時間": now, "股票": symbol, "訊息": msg, "類型": atype}
+    key = f"{symbol}|{msg}"
+    if key not in st.session_state.sent_alerts:
+        st.session_state.alert_log.insert(0, entry)
+        st.session_state.alert_log = st.session_state.alert_log[:200]
+        st.session_state.sent_alerts.add(key)
+        send_telegram(f"📊 [{symbol}] {msg}")
+
+# ── 數據抓取 ──────────────────────────────────────────────────────────────────
+@st.cache_data(ttl=60)
+def fetch_data(symbol: str, interval: str) -> pd.DataFrame:
+    period = PERIOD_MAP.get(interval, "1y")
+    df = yf.download(symbol, period=period, interval=interval, auto_adjust=True, progress=False)
+    if df.empty:
+        return df
+    df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
+    df.dropna(inplace=True)
+    return df
+
+# ── 技術指標計算 ──────────────────────────────────────────────────────────────
+def calc_ema(series, n):
+    return series.ewm(span=n, adjust=False).mean()
+
+def calc_ma(series, n):
+    return series.rolling(n).mean()
+
+def calc_macd(series, fast=12, slow=26, signal=9):
+    ema_fast = calc_ema(series, fast)
+    ema_slow = calc_ema(series, slow)
+    dif = ema_fast - ema_slow
+    dea = calc_ema(dif, signal)
+    hist = (dif - dea) * 2
+    return dif, dea, hist
+
+def calc_pivot(df, left=5, right=5):
+    highs, lows = [], []
+    close = df["Close"].values
+    high  = df["High"].values
+    low   = df["Low"].values
+    idx   = df.index
+    n = len(df)
+    for i in range(left, n - right):
+        if high[i] == max(high[i-left:i+right+1]):
+            highs.append((idx[i], high[i]))
+        if low[i]  == min(low[i-left:i+right+1]):
+            lows.append((idx[i], low[i]))
+    return highs, lows
+
+def detect_trend(df) -> str:
+    if len(df) < 200:
         return "盤整"
+    ema5  = calc_ema(df["Close"], 5).iloc[-1]
+    ema20 = calc_ema(df["Close"], 20).iloc[-1]
+    ema60 = calc_ema(df["Close"], 60).iloc[-1]
+    ema200= calc_ema(df["Close"], 200).iloc[-1]
+    if ema5 > ema20 > ema60 > ema200:
+        return "多頭"
+    if ema5 < ema20 < ema60 < ema200:
+        return "空頭"
+    return "盤整"
 
-# 主循環
-tabs = st.tabs(symbols) if len(symbols) > 1 else [st.container()]
+# ── 警示邏輯 ──────────────────────────────────────────────────────────────────
+def run_alerts(symbol, df):
+    if len(df) < 30:
+        return
+    close = df["Close"]
+    vol   = df["Volume"]
 
-for i, symbol in enumerate(symbols):
-    with tabs[i] if len(symbols) > 1 else tabs[0]:
-        st.subheader(f"{symbol} 實時數據")
+    # MACD 金叉/死叉
+    dif, dea, _ = calc_macd(close)
+    if dif.iloc[-1] > dea.iloc[-1] and dif.iloc[-2] <= dea.iloc[-2]:
+        add_alert(symbol, "MACD 金叉 🟢", "bull")
+    if dif.iloc[-1] < dea.iloc[-1] and dif.iloc[-2] >= dea.iloc[-2]:
+        add_alert(symbol, "MACD 死叉 🔴", "bear")
 
-        # 獲取數據
-        ticker = yf.Ticker(symbol)
-        if interval in ["1m", "5m", "15m", "30m"]:
-            period = "5d" if interval == "1m" else "30d"
-        elif interval == "1d":
-            period = "1y"
-        elif interval == "1wk":
-            period = "5y"
-        else:
-            period = "10y"
-        df = ticker.history(period=period, interval=interval)
-        df = df.dropna()
+    # EMA5 穿 EMA20
+    ema5  = calc_ema(close, 5)
+    ema20 = calc_ema(close, 20)
+    if ema5.iloc[-1] > ema20.iloc[-1] and ema5.iloc[-2] <= ema20.iloc[-2]:
+        add_alert(symbol, "EMA5 上穿 EMA20（多頭排列開始）⬆️", "bull")
+    if ema5.iloc[-1] < ema20.iloc[-1] and ema5.iloc[-2] >= ema20.iloc[-2]:
+        add_alert(symbol, "EMA5 下穿 EMA20（空頭排列開始）⬇️", "bear")
 
-        if df.empty:
-            st.error("無法獲取數據，請檢查股票代號。")
-            continue
+    # 全 EMA 多頭排列
+    emas = [calc_ema(close, n).iloc[-1] for n, _ in EMA_CONFIGS]
+    if all(emas[i] > emas[i+1] for i in range(len(emas)-1)):
+        add_alert(symbol, "所有 EMA 多頭排列 🚀", "bull")
 
-        # 計算指標
-        # EMA
-        ema_periods = [5, 10, 20, 30, 40, 60, 120, 200]
-        ema_colors = ["green", "yellow", "orange", "red", "purple", "blue", "cyan", "indigo"]
-        for p, color in zip(ema_periods, ema_colors):
-            df[f"EMA{p}"] = df["Close"].ewm(span=p, adjust=False).mean()
+    # 成交量暴增
+    vol_ma5 = vol.rolling(5).mean().iloc[-1]
+    if vol.iloc[-1] > vol_ma5 * 2:
+        add_alert(symbol, f"成交量暴增 {vol.iloc[-1]/vol_ma5:.1f}x 均量 📊", "vol")
 
-        # MA
-        df["MA5"] = df["Close"].rolling(5).mean()
-        df["MA15"] = df["Close"].rolling(15).mean()
+    # 支撐阻力突破
+    pivots_h, pivots_l = calc_pivot(df.tail(60))
+    price = close.iloc[-1]
+    if pivots_h:
+        resist = max(p[1] for p in pivots_h)
+        if price > resist:
+            add_alert(symbol, f"突破阻力位 ${resist:.2f} ⚡", "bull")
+    if pivots_l:
+        support = min(p[1] for p in pivots_l)
+        if price < support:
+            add_alert(symbol, f"跌破支撐位 ${support:.2f} ⚠️", "bear")
 
-        # MACD
-        ema12 = df["Close"].ewm(span=12, adjust=False).mean()
-        ema26 = df["Close"].ewm(span=26, adjust=False).mean()
-        df["DIF"] = ema12 - ema26
-        df["DEA"] = df["DIF"].ewm(span=9, adjust=False).mean()
-        df["MACD"] = df["DIF"] - df["DEA"]
+# ── 繪圖 ─────────────────────────────────────────────────────────────────────
+def build_chart(symbol, df, interval_label):
+    if df.empty:
+        return None
 
-        # 支撐阻力
-        # 使用 argrelextrema 找近 n_pivots 根的局部高低點
-        recent_df = df.tail(n_pivots)
-        high_idx = argrelextrema(recent_df["High"].values, np.greater, order=5)[0]
-        low_idx = argrelextrema(recent_df["Low"].values, np.less, order=5)[0]
-        resistances = recent_df.iloc[high_idx]["High"].mean() if len(high_idx) > 0 else np.nan
-        supports = recent_df.iloc[low_idx]["Low"].mean() if len(low_idx) > 0 else np.nan
+    close = df["Close"]
+    vol   = df["Volume"]
 
-        # 成交量
-        df["VOL_MA5"] = df["Volume"].rolling(vol_ma_period).mean()
+    # 計算所有指標
+    ema_series = {n: calc_ema(close, n) for n, _ in EMA_CONFIGS}
+    ma_series  = {n: calc_ma(close, n)  for n, _, _ in MA_CONFIGS}
+    dif, dea, hist = calc_macd(close)
+    pivots_h, pivots_l = calc_pivot(df.tail(100))
 
-        # 最新數據
-        latest = df.iloc[-1]
-        prev = df.iloc[-2] if len(df) > 1 else latest
+    # 建立子圖
+    fig = make_subplots(
+        rows=3, cols=1,
+        shared_xaxes=True,
+        row_heights=[0.55, 0.2, 0.25],
+        vertical_spacing=0.02,
+        subplot_titles=(f"{symbol} K線圖 ({interval_label})", "成交量", "MACD"),
+    )
 
-        # 警示檢查
-        alerts = []
-        key = symbol
+    # ── K線 ──
+    fig.add_trace(go.Candlestick(
+        x=df.index,
+        open=df["Open"], high=df["High"], low=df["Low"], close=close,
+        increasing_line_color="#ff4444", increasing_fillcolor="#ff4444",
+        decreasing_line_color="#00cc44", decreasing_fillcolor="#00cc44",
+        name="K線", showlegend=False,
+    ), row=1, col=1)
 
-        # MACD 金叉/死叉
-        if prev["DIF"] < prev["DEA"] and latest["DIF"] > latest["DEA"]:
-            alerts.append("MACD 金叉")
-        elif prev["DIF"] > prev["DEA"] and latest["DIF"] < latest["DEA"]:
-            alerts.append("MACD 死叉")
+    # EMA 線
+    for n, color in EMA_CONFIGS:
+        fig.add_trace(go.Scatter(
+            x=df.index, y=ema_series[n],
+            line=dict(color=color, width=1),
+            name=f"EMA{n}", opacity=0.85,
+        ), row=1, col=1)
 
-        # 價格突破
-        if not np.isnan(resistances) and prev["Close"] < resistances and latest["Close"] > resistances:
-            alerts.append("價格突破阻力位")
-        if not np.isnan(supports) and prev["Close"] > supports and latest["Close"] < supports:
-            alerts.append("價格跌破支撐位")
+    # MA 線
+    for n, color, dash in MA_CONFIGS:
+        fig.add_trace(go.Scatter(
+            x=df.index, y=ma_series[n],
+            line=dict(color=color, width=1.2, dash=dash),
+            name=f"MA{n}",
+        ), row=1, col=1)
 
-        # 成交量暴增
-        if latest["Volume"] > vol_multiplier * latest["VOL_MA5"]:
-            alerts.append("成交量暴增")
+    # 支撐阻力水平線
+    if pivots_h:
+        resist = max(p[1] for p in pivots_h)
+        fig.add_hline(y=resist, line=dict(color="#ff6666", dash="dash", width=1),
+                      annotation_text=f"阻力 {resist:.2f}", row=1, col=1)
+    if pivots_l:
+        support = min(p[1] for p in pivots_l)
+        fig.add_hline(y=support, line=dict(color="#66ff66", dash="dash", width=1),
+                      annotation_text=f"支撐 {support:.2f}", row=1, col=1)
 
-        # EMA5 穿 EMA20
-        if prev["EMA5"] < prev["EMA20"] and latest["EMA5"] > latest["EMA20"]:
-            alerts.append("EMA5 上穿 EMA20（多頭排列開始）")
-        elif prev["EMA5"] > prev["EMA20"] and latest["EMA5"] < latest["EMA20"]:
-            alerts.append("EMA5 下穿 EMA20（空頭排列開始）")
+    # 最高/最低標記
+    max_idx = df["High"].idxmax()
+    min_idx = df["Low"].idxmin()
+    fig.add_annotation(x=max_idx, y=df["High"].max(),
+        text=f"最高 {df['High'].max():.2f}", showarrow=True,
+        arrowhead=2, arrowcolor="#ff4444", font=dict(color="#ff4444", size=10), row=1, col=1)
+    fig.add_annotation(x=min_idx, y=df["Low"].min(),
+        text=f"最低 {df['Low'].min():.2f}", showarrow=True,
+        arrowhead=2, arrowcolor="#00cc44", font=dict(color="#00cc44", size=10), row=1, col=1)
 
-        # 所有 EMA 多頭排列
-        emas = latest[[f"EMA{p}" for p in ema_periods]]
-        if all(emas.diff() > 0):
-            alerts.append("所有 EMA 多頭排列")
+    # ── 成交量 ──
+    colors_vol = ["#ff4444" if c >= o else "#00cc44"
+                  for c, o in zip(df["Close"], df["Open"])]
+    fig.add_trace(go.Bar(
+        x=df.index, y=vol, marker_color=colors_vol,
+        name="成交量", showlegend=False,
+    ), row=2, col=1)
 
-        # 發送警示並記錄
-        for alert in alerts:
-            if st.session_state.last_alerts.get(f"{key}_{alert}", 0) < time.time() - 3600:  # 每小時一次
-                message = f"{symbol} 警示: {alert}"
-                send_telegram_message(message)
-                st.session_state.alert_log.append({"時間": pd.Timestamp.now(), "股票": symbol, "警示": alert})
-                st.session_state.last_alerts[f"{key}_{alert}"] = time.time()
+    # 均量線
+    vol_ma5 = vol.rolling(5).mean()
+    fig.add_trace(go.Scatter(
+        x=df.index, y=vol_ma5,
+        line=dict(color="#ffaa00", width=1),
+        name="VOL MA5",
+    ), row=2, col=1)
 
-        # 趨勢
-        trend = determine_trend(emas)
+    # 異常放量標記
+    anomaly = vol > vol_ma5 * 2
+    fig.add_trace(go.Scatter(
+        x=df.index[anomaly], y=vol[anomaly],
+        mode="markers", marker=dict(color="#ff00ff", size=6, symbol="star"),
+        name="異常放量",
+    ), row=2, col=1)
 
-        # 顯示 EMA 數值
-        st.subheader("EMA 均線數值")
-        ema_values = ", ".join([f"{p}: {latest[f'EMA{p}']:.2f} ({color})" for p, color in zip(ema_periods, ema_colors)])
-        st.write(ema_values)
+    # ── MACD ──
+    bar_colors = ["#ff4444" if v >= 0 else "#00cc44" for v in hist]
+    fig.add_trace(go.Bar(
+        x=df.index, y=hist, marker_color=bar_colors,
+        name="MACD柱", showlegend=False,
+    ), row=3, col=1)
+    fig.add_trace(go.Scatter(
+        x=df.index, y=dif, line=dict(color="#ffaa00", width=1.2), name="DIF",
+    ), row=3, col=1)
+    fig.add_trace(go.Scatter(
+        x=df.index, y=dea, line=dict(color="#0088ff", width=1.2), name="DEA",
+    ), row=3, col=1)
 
-        # K線圖
-        fig_candles = go.Figure()
-        fig_candles.add_trace(go.Candlestick(x=df.index,
-                                             open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"],
-                                             name="K線", increasing_line_color="red", decreasing_line_color="green"))
+    # 金叉/死叉標記
+    for i in range(1, len(dif)):
+        if dif.iloc[i] > dea.iloc[i] and dif.iloc[i-1] <= dea.iloc[i-1]:
+            fig.add_annotation(x=dif.index[i], y=dif.iloc[i],
+                text="金叉", showarrow=False,
+                font=dict(color="#ffdd00", size=9), row=3, col=1)
+        if dif.iloc[i] < dea.iloc[i] and dif.iloc[i-1] >= dea.iloc[i-1]:
+            fig.add_annotation(x=dif.index[i], y=dif.iloc[i],
+                text="死叉", showarrow=False,
+                font=dict(color="#ff6666", size=9), row=3, col=1)
 
-        # 疊加 EMA 和 MA
-        for p, color in zip(ema_periods, ema_colors):
-            fig_candles.add_trace(go.Scatter(x=df.index, y=df[f"EMA{p}"], mode="lines", name=f"EMA{p}", line=dict(color=color)))
-        fig_candles.add_trace(go.Scatter(x=df.index, y=df["MA5"], mode="lines", name="MA5", line=dict(color="black")))
-        fig_candles.add_trace(go.Scatter(x=df.index, y=df["MA15"], mode="lines", name="MA15", line=dict(color="gray")))
+    fig.update_layout(
+        height=800,
+        template="plotly_dark",
+        paper_bgcolor="#0e1117",
+        plot_bgcolor="#0e1117",
+        legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0, font=dict(size=10)),
+        margin=dict(l=10, r=10, t=40, b=10),
+        xaxis_rangeslider_visible=False,
+    )
+    fig.update_xaxes(showgrid=True, gridcolor="#2a2a3a")
+    fig.update_yaxes(showgrid=True, gridcolor="#2a2a3a")
 
-        # 標記最高最低
-        max_price = df["High"].max()
-        min_price = df["Low"].min()
-        fig_candles.add_annotation(x=df["High"].idxmax(), y=max_price, text=f"最高: {max_price:.2f}", showarrow=True)
-        fig_candles.add_annotation(x=df["Low"].idxmin(), y=min_price, text=f"最低: {min_price:.2f}", showarrow=True)
+    return fig
 
-        # 支撐阻力線
-        if not np.isnan(resistances):
-            fig_candles.add_hline(y=resistances, line_dash="dash", line_color="red", annotation_text="阻力")
-        if not np.isnan(supports):
-            fig_candles.add_hline(y=supports, line_dash="dash", line_color="green", annotation_text="支撐")
+# ── 渲染單一股票 ──────────────────────────────────────────────────────────────
+def render_symbol(symbol, interval_label, show_alerts):
+    interval = INTERVAL_MAP[interval_label]
+    with st.spinner(f"載入 {symbol} 數據中..."):
+        df = fetch_data(symbol, interval)
 
-        fig_candles.update_layout(title=f"{symbol} K線圖", xaxis_title="時間", yaxis_title="價格", height=500)
-        st.plotly_chart(fig_candles, use_container_width=True)
+    if df is None or df.empty:
+        st.error(f"❌ 無法取得 {symbol} 數據，請確認代號是否正確。")
+        return
 
-        # 成交量圖
-        colors = ["red" if o < c else "green" for o, c in zip(df["Open"], df["Close"])]
-        fig_vol = go.Figure()
-        fig_vol.add_trace(go.Bar(x=df.index, y=df["Volume"], name="成交量", marker_color=colors))
-        fig_vol.add_trace(go.Scatter(x=df.index, y=df["VOL_MA5"], mode="lines", name="VOL MA5", line=dict(color="blue")))
+    # 計算當前值
+    close    = df["Close"]
+    last_close = float(close.iloc[-1])
+    last_open  = float(df["Open"].iloc[-1])
+    chg        = last_close - float(close.iloc[-2]) if len(close) > 1 else 0
+    chg_pct    = chg / float(close.iloc[-2]) * 100 if len(close) > 1 else 0
+    vol_now    = int(df["Volume"].iloc[-1])
 
-        # 標記異常放量
-        abnormal = df[df["Volume"] > vol_multiplier * df["VOL_MA5"]]
-        fig_vol.add_trace(go.Scatter(x=abnormal.index, y=abnormal["Volume"], mode="markers", name="異常放量", marker=dict(color="orange", size=10)))
+    # 趨勢判斷
+    trend = detect_trend(df)
+    trend_html = {
+        "多頭": '<span class="trend-bull">▲ 多頭</span>',
+        "空頭": '<span class="trend-bear">▼ 空頭</span>',
+        "盤整": '<span class="trend-side">◆ 盤整</span>',
+    }[trend]
 
-        fig_vol.update_layout(title="成交量圖", xaxis_title="時間", yaxis_title="成交量（股）", height=300)
-        st.plotly_chart(fig_vol, use_container_width=True)
+    # 頂部指標列
+    col1, col2, col3, col4, col5 = st.columns(5)
+    col1.metric("最新價格", f"${last_close:.2f}", f"{chg:+.2f} ({chg_pct:+.2f}%)")
+    col2.metric("成交量 (萬股)", f"{vol_now/10000:.1f}")
+    col3.metric("最高", f"${df['High'].iloc[-1]:.2f}")
+    col4.metric("最低", f"${df['Low'].iloc[-1]:.2f}")
+    with col5:
+        st.markdown(f"**趨勢判斷**<br>{trend_html}", unsafe_allow_html=True)
 
-        # MACD 圖
-        fig_macd = go.Figure()
-        fig_macd.add_trace(go.Scatter(x=df.index, y=df["DIF"], mode="lines", name="DIF", line=dict(color="blue")))
-        fig_macd.add_trace(go.Scatter(x=df.index, y=df["DEA"], mode="lines", name="DEA", line=dict(color="orange")))
-        bar_colors = ["red" if v > 0 else "green" for v in df["MACD"]]
-        fig_macd.add_trace(go.Bar(x=df.index, y=df["MACD"], name="MACD", marker_color=bar_colors))
+    # EMA 數值列
+    ema_labels = []
+    for n, color in EMA_CONFIGS:
+        val = float(calc_ema(close, n).iloc[-1])
+        ema_labels.append(f'<span style="color:{color};font-size:0.8rem">EMA{n}: <b>{val:.2f}</b></span>')
+    st.markdown("　".join(ema_labels), unsafe_allow_html=True)
 
-        # 標記金叉死叉
-        crosses = np.where((df["DIF"].shift(1) < df["DEA"].shift(1)) & (df["DIF"] > df["DEA"]))[0]
-        for idx in crosses:
-            fig_macd.add_annotation(x=df.index[idx], y=df["MACD"][idx], text="金叉", showarrow=True)
-        crosses = np.where((df["DIF"].shift(1) > df["DEA"].shift(1)) & (df["DIF"] < df["DEA"]))[0]
-        for idx in crosses:
-            fig_macd.add_annotation(x=df.index[idx], y=df["MACD"][idx], text="死叉", showarrow=True)
+    # K線 + 成交量 + MACD 圖
+    fig = build_chart(symbol, df, interval_label)
+    if fig:
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True})
 
-        fig_macd.update_layout(title="MACD 圖", xaxis_title="時間", yaxis_title="值", height=300)
-        st.plotly_chart(fig_macd, use_container_width=True)
+    # 警示
+    if show_alerts:
+        run_alerts(symbol, df)
 
-        # 警示面板
-        st.subheader("警示訊息")
-        for alert in alerts:
-            st.warning(alert)
+# ── Sidebar ──────────────────────────────────────────────────────────────────
+with st.sidebar:
+    st.title("📈 美股監控系統")
+    st.markdown("---")
 
-        # 目前趨勢
-        st.subheader("目前趨勢")
-        st.write(trend)
+    raw_input = st.text_area("股票代號（逗號分隔）", value="TSLA,AAPL,NVDA", height=80)
+    symbols = [s.strip().upper() for s in raw_input.replace("，", ",").split(",") if s.strip()]
 
-        # 最新 VOL
-        st.write(f"當前成交量: {latest['Volume'] / 10000:.2f} 萬股")
+    interval_label = st.selectbox("時間週期", list(INTERVAL_MAP.keys()), index=4)
 
-# 底部：匯出警示紀錄
+    st.markdown("---")
+    auto_refresh = st.toggle("自動刷新", value=False)
+    refresh_sec  = st.slider("刷新間隔（秒）", 60, 300, 60, step=30, disabled=not auto_refresh)
+
+    st.markdown("---")
+    show_alerts = st.toggle("啟用警示偵測", value=True)
+
+    if st.button("🗑️ 清除警示記錄"):
+        st.session_state.alert_log = []
+        st.session_state.sent_alerts = set()
+        st.toast("警示記錄已清除")
+
+    if st.session_state.alert_log:
+        csv_data = pd.DataFrame(st.session_state.alert_log).to_csv(index=False, encoding="utf-8-sig")
+        st.download_button("📥 匯出警示 CSV", csv_data, "alerts.csv", "text/csv")
+
+    st.markdown("---")
+    st.caption("數據來源：Yahoo Finance\n\n⚠️ 僅供參考，不構成投資建議")
+
+# ── 主區域：Tab 切換 ──────────────────────────────────────────────────────────
+st.title("🇺🇸 美股即時監控系統")
+
+if not symbols:
+    st.info("請在左側輸入股票代號")
+    st.stop()
+
+tabs = st.tabs([f"📊 {s}" for s in symbols])
+for tab, symbol in zip(tabs, symbols):
+    with tab:
+        render_symbol(symbol, interval_label, show_alerts)
+
+# ── 警示面板 ──────────────────────────────────────────────────────────────────
 if st.session_state.alert_log:
-    st.header("警示紀錄")
-    log_df = pd.DataFrame(st.session_state.alert_log)
-    csv = log_df.to_csv(index=False).encode("utf-8-sig")
-    st.download_button("匯出 CSV", data=csv, file_name="alert_log.csv", mime="text/csv")
+    st.markdown("---")
+    st.subheader("🔔 警示訊息記錄")
+    type_map = {
+        "bull": "alert-bull", "bear": "alert-bear",
+        "vol": "alert-vol",   "info": "alert-info",
+    }
+    for entry in st.session_state.alert_log[:30]:
+        cls = type_map.get(entry["類型"], "alert-info")
+        st.markdown(
+            f'<div class="alert-box {cls}">🕐 {entry["時間"]}　【{entry["股票"]}】　{entry["訊息"]}</div>',
+            unsafe_allow_html=True,
+        )
 
-# 自動刷新
+# ── 自動刷新 ──────────────────────────────────────────────────────────────────
 if auto_refresh:
-    time.sleep(refresh_interval)
+    time.sleep(refresh_sec)
+    st.cache_data.clear()
     st.rerun()
