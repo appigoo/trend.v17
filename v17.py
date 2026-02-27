@@ -291,11 +291,25 @@ def run_alerts(symbol, period_label, df):
 # ══════════════════════════════════════════════════════════════════════════════
 def build_chart(symbol, df, interval_label, compact=False):
     if df.empty: return None
+
+    # ── 限制最多顯示 90 根 K 線，避免圖表擁擠 ──
+    # EMA/MACD 用完整數據計算（保留歷史），再截取最後 90 根顯示
+    MAX_BARS = 90
+    close_full, vol_full = df["Close"], df["Volume"]
+    ema_s_full = {n: calc_ema(close_full, n) for n, _ in EMA_CONFIGS}
+    ma_s_full  = {n: calc_ma(close_full,  n) for n, _, _ in MA_CONFIGS}
+    dif_full, dea_full, hist_full = calc_macd(close_full)
+
+    # 截取最後 90 根用於繪圖
+    df   = df.tail(MAX_BARS)
     close, vol = df["Close"], df["Volume"]
-    ema_s = {n: calc_ema(close,n) for n,_ in EMA_CONFIGS}
-    ma_s  = {n: calc_ma(close,n)  for n,_,_ in MA_CONFIGS}
-    dif, dea, hist = calc_macd(close)
-    # 依週期決定阻力/支撐，interval_label e.g. '日K'
+    ema_s = {n: s.tail(MAX_BARS) for n, s in ema_s_full.items()}
+    ma_s  = {n: s.tail(MAX_BARS) for n, s in ma_s_full.items()}
+    dif   = dif_full.tail(MAX_BARS)
+    dea   = dea_full.tail(MAX_BARS)
+    hist  = hist_full.tail(MAX_BARS)
+
+    # 支撐阻力用截取後的資料（已含 ±30% 過濾）
     itvl_code = {v[0]: k for k, v in INTERVAL_MAP.items()}.get(interval_label, "1d")
     pivots_h, pivots_l = calc_pivot(df, interval=itvl_code)
 
