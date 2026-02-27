@@ -370,21 +370,43 @@ def build_chart(symbol, df, interval_label, compact=False):
     fig.add_trace(go.Scatter(x=df.index, y=vol_ma5,
                               line=dict(color="#ffaa00", width=1.5), name="VOL MA5"), row=2, col=1)
 
-    # 異常放量：底部小三角，不遮擋成交量柱頂
-    anomaly_mask = vol > vol_ma5 * 2
+    # 異常放量：只標記「最顯著的幾根」，用柱子邊框高亮 + 頂部小鑽石
+    # 策略：同一段密集放量只取最大的那根，避免連續出現滿屏標注
+    anomaly_mask = (vol > vol_ma5 * 2).values
     if anomaly_mask.any():
-        # 固定在 y=0 底部附近，避免星號被推到圖頂
-        anomaly_y = [float(vol_ma5.iloc[i]) * 0.12
-                     for i, flag in enumerate(anomaly_mask) if flag]
+        # 把連續異常段落找出來，每段只取量最大的那根
+        groups, in_group, g_start = [], False, 0
+        for i, flag in enumerate(anomaly_mask):
+            if flag and not in_group:
+                in_group, g_start = True, i
+            elif not flag and in_group:
+                groups.append((g_start, i - 1))
+                in_group = False
+        if in_group:
+            groups.append((g_start, len(anomaly_mask) - 1))
+
+        # 每段取量最大的 bar 的 integer position
+        rep_pos = []
+        for g0, g1 in groups:
+            seg_vals = vol.values[g0:g1+1]
+            rep_pos.append(g0 + int(seg_vals.argmax()))
+
+        rep_x    = [df.index[p] for p in rep_pos]
+        rep_vol  = [float(vol.values[p])    for p in rep_pos]
+        rep_ma   = [float(vol_ma5.values[p]) if not np.isnan(vol_ma5.values[p]) else 1
+                    for p in rep_pos]
+        mult_txt = [f"異常放量 {v/max(m,1):.1f}x 均量"
+                    for v, m in zip(rep_vol, rep_ma)]
+
+        # 柱頂鑽石標記（不加擁擠文字，hover 查看倍數）
         fig.add_trace(go.Scatter(
-            x=df.index[anomaly_mask],
-            y=anomaly_y,
-            mode="markers+text",
-            marker=dict(color="#ff00ff", size=9, symbol="triangle-up"),
-            text=["放量"] * int(anomaly_mask.sum()),
-            textposition="top center",
-            textfont=dict(size=8, color="#ff88ff"),
+            x=rep_x, y=rep_vol,
+            mode="markers",
+            marker=dict(color="#ff00ff", size=11, symbol="diamond",
+                        line=dict(color="#ffffff", width=1.2)),
             name="異常放量",
+            hovertext=mult_txt,
+            hoverinfo="text+x",
         ), row=2, col=1)
 
     # ── MACD ────────────────────────────────────────────────────────────────
@@ -420,48 +442,53 @@ def build_chart(symbol, df, interval_label, compact=False):
         if len(filtered) >= max_labels:
             break
 
-    # 繪製：金叉箭頭朝下（標在 DIF 下方）、死叉箭頭朝上（標在 DIF 上方）
-    macd_range = float(hist.abs().max()) if hist.abs().max() > 0 else 1
-    base_ay    = macd_range * 12   # 像素偏移基底
+    # 繪製：金叉標在底部（ay 正值=往下偏移），死叉標在頂部（ay 負值=往上偏移）
+    # 固定像素偏移，不依賴 MACD 數值範圍，確保 compact/full 都清晰
+    base_px = 38 if compact else 46
 
     for seq, (pos, ctype) in enumerate(filtered):
-        x_val = dif.index[pos]
-        y_val = float(dif.iloc[pos])
-        extra = 1 + (seq % 2) * 0.6    # 交替遠近，避免水平相鄰重疊
+        x_val  = dif.index[pos]
+        y_val  = float(dif.iloc[pos])
+        extra  = 1 + (seq % 2) * 0.45    # 偶數序號偏移更遠，水平錯開
         if ctype == "gold":
-            ay_px  = int(base_ay * extra)
+            ay_px  = int(base_px * extra)     # 正 = 箭頭朝上，標籤在下方
             text   = "⬆ 金叉"
-            fcol, bgcol, bcol, acol = "#ffee55", "rgba(36,32,0,0.9)", "#bbaa00", "#ddcc00"
+            fcol, bgcol, bcol, acol = "#ffee55", "rgba(36,32,0,0.92)", "#bbaa00", "#ddcc00"
         else:
-            ay_px  = -int(base_ay * extra)
+            ay_px  = -int(base_px * extra)    # 負 = 箭頭朝下，標籤在上方
             text   = "⬇ 死叉"
-            fcol, bgcol, bcol, acol = "#ff9999", "rgba(36,0,0,0.9)", "#bb3333", "#cc4444"
+            fcol, bgcol, bcol, acol = "#ff9999", "rgba(36,0,0,0.92)", "#bb3333", "#cc4444"
 
         fig.add_annotation(
             x=x_val, y=y_val, text=text,
             showarrow=True, arrowhead=2, arrowwidth=1.5,
             ax=0, ay=ay_px,
             arrowcolor=acol,
-            font=dict(color=fcol, size=10, family="Arial Black"),
+            font=dict(color=fcol, size=9 if compact else 10, family="Arial Black"),
             bgcolor=bgcol, bordercolor=bcol, borderwidth=1, borderpad=3,
             row=3, col=1,
         )
 
-    leg_sz = 9 if compact else 11
+    leg_sz = 8 if compact else 11
+    # compact 模式：圖例只顯示關鍵線，縮短 margin
     fig.update_layout(
         height=chart_h, template="plotly_dark",
         paper_bgcolor="#0e1117", plot_bgcolor="#111520",
-        font=dict(family="Arial, sans-serif", size=11, color="#ccddee"),
+        font=dict(family="Arial, sans-serif", size=10 if compact else 11, color="#ccddee"),
         legend=dict(
-            orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0,
+            orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0,
             font=dict(size=leg_sz, color="#ddeeff"),
-            bgcolor="rgba(14,17,23,0.8)", bordercolor="#2e3456", borderwidth=1,
+            bgcolor="rgba(14,17,23,0.85)", bordercolor="#2e3456", borderwidth=1,
+            itemsizing="constant",
+            traceorder="normal",
         ),
-        margin=dict(l=8, r=8, t=40, b=6),
+        margin=dict(l=6, r=6, t=36 if compact else 44, b=4),
         xaxis_rangeslider_visible=False,
     )
-    fig.update_xaxes(showgrid=True, gridcolor="#1a1e30", tickfont=dict(size=10))
-    fig.update_yaxes(showgrid=True, gridcolor="#1a1e30", tickfont=dict(size=10))
+    fig.update_xaxes(showgrid=True, gridcolor="#1a1e30",
+                     tickfont=dict(size=9 if compact else 10))
+    fig.update_yaxes(showgrid=True, gridcolor="#1a1e30",
+                     tickfont=dict(size=9 if compact else 10))
     return fig
 
 # ══════════════════════════════════════════════════════════════════════════════
