@@ -361,7 +361,7 @@ def build_chart(symbol, df, interval_label, compact=False):
         bgcolor="rgba(10,30,10,0.85)", bordercolor="#00cc44", borderwidth=1,
         row=1, col=1)
 
-    # 成交量
+    # ── 成交量 ──────────────────────────────────────────────────────────────
     col_vol = ["#ff4444" if c >= o else "#00cc44"
                for c, o in zip(df["Close"], df["Open"])]
     fig.add_trace(go.Bar(x=df.index, y=vol, marker_color=col_vol,
@@ -369,14 +369,25 @@ def build_chart(symbol, df, interval_label, compact=False):
     vol_ma5 = vol.rolling(5).mean()
     fig.add_trace(go.Scatter(x=df.index, y=vol_ma5,
                               line=dict(color="#ffaa00", width=1.5), name="VOL MA5"), row=2, col=1)
-    anomaly = vol > vol_ma5 * 2
-    if anomaly.any():
+
+    # 異常放量：底部小三角，不遮擋成交量柱頂
+    anomaly_mask = vol > vol_ma5 * 2
+    if anomaly_mask.any():
+        # 固定在 y=0 底部附近，避免星號被推到圖頂
+        anomaly_y = [float(vol_ma5.iloc[i]) * 0.12
+                     for i, flag in enumerate(anomaly_mask) if flag]
         fig.add_trace(go.Scatter(
-            x=df.index[anomaly], y=vol[anomaly], mode="markers",
-            marker=dict(color="#ff00ff", size=7, symbol="star"), name="異常放量",
+            x=df.index[anomaly_mask],
+            y=anomaly_y,
+            mode="markers+text",
+            marker=dict(color="#ff00ff", size=9, symbol="triangle-up"),
+            text=["放量"] * int(anomaly_mask.sum()),
+            textposition="top center",
+            textfont=dict(size=8, color="#ff88ff"),
+            name="異常放量",
         ), row=2, col=1)
 
-    # MACD
+    # ── MACD ────────────────────────────────────────────────────────────────
     bar_col = ["#ff4444" if v >= 0 else "#00cc44" for v in hist]
     fig.add_trace(go.Bar(x=df.index, y=hist, marker_color=bar_col,
                          name="MACD柱", showlegend=False), row=3, col=1)
@@ -385,22 +396,56 @@ def build_chart(symbol, df, interval_label, compact=False):
     fig.add_trace(go.Scatter(x=df.index, y=dea,
                               line=dict(color="#0088ff", width=1.5), name="DEA"), row=3, col=1)
 
-    # 金叉死叉（最近 5 個）
-    cnt = 0
-    for i in range(len(dif)-1, 0, -1):
-        if cnt >= 5: break
+    # ── 金叉/死叉（智能去擁擠）────────────────────────────────────────────
+    # 收集所有原始交叉點
+    raw_crosses = []
+    for i in range(1, len(dif)):
         if dif.iloc[i] > dea.iloc[i] and dif.iloc[i-1] <= dea.iloc[i-1]:
-            fig.add_annotation(x=dif.index[i], y=float(dif.iloc[i]),
-                text="⬆金叉", showarrow=True, arrowhead=2, arrowwidth=1.5,
-                arrowcolor="#ffdd00", font=dict(color="#ffee55", size=10, family="Arial Black"),
-                bgcolor="rgba(30,28,0,0.85)", bordercolor="#ffdd00", row=3, col=1)
-            cnt += 1
+            raw_crosses.append((i, "gold"))
         elif dif.iloc[i] < dea.iloc[i] and dif.iloc[i-1] >= dea.iloc[i-1]:
-            fig.add_annotation(x=dif.index[i], y=float(dif.iloc[i]),
-                text="⬇死叉", showarrow=True, arrowhead=2, arrowwidth=1.5,
-                arrowcolor="#ff6666", font=dict(color="#ff8888", size=10, family="Arial Black"),
-                bgcolor="rgba(30,0,0,0.85)", bordercolor="#ff6666", row=3, col=1)
-            cnt += 1
+            raw_crosses.append((i, "dead"))
+
+    # 間距過濾：相鄰標注至少 min_gap 根 K 線，且同方向連發只取最新
+    total_bars = len(dif)
+    min_gap    = max(6, total_bars // 20)
+    max_labels = 3 if compact else 5
+
+    filtered, last_pos, last_type = [], -9999, None
+    for pos, ctype in reversed(raw_crosses):
+        gap_ok  = (pos - last_pos) >= min_gap or last_pos == -9999
+        diff_ok = (ctype != last_type) or last_pos == -9999
+        if gap_ok and diff_ok:
+            filtered.insert(0, (pos, ctype))
+            last_pos, last_type = pos, ctype
+        if len(filtered) >= max_labels:
+            break
+
+    # 繪製：金叉箭頭朝下（標在 DIF 下方）、死叉箭頭朝上（標在 DIF 上方）
+    macd_range = float(hist.abs().max()) if hist.abs().max() > 0 else 1
+    base_ay    = macd_range * 12   # 像素偏移基底
+
+    for seq, (pos, ctype) in enumerate(filtered):
+        x_val = dif.index[pos]
+        y_val = float(dif.iloc[pos])
+        extra = 1 + (seq % 2) * 0.6    # 交替遠近，避免水平相鄰重疊
+        if ctype == "gold":
+            ay_px  = int(base_ay * extra)
+            text   = "⬆ 金叉"
+            fcol, bgcol, bcol, acol = "#ffee55", "rgba(36,32,0,0.9)", "#bbaa00", "#ddcc00"
+        else:
+            ay_px  = -int(base_ay * extra)
+            text   = "⬇ 死叉"
+            fcol, bgcol, bcol, acol = "#ff9999", "rgba(36,0,0,0.9)", "#bb3333", "#cc4444"
+
+        fig.add_annotation(
+            x=x_val, y=y_val, text=text,
+            showarrow=True, arrowhead=2, arrowwidth=1.5,
+            ax=0, ay=ay_px,
+            arrowcolor=acol,
+            font=dict(color=fcol, size=10, family="Arial Black"),
+            bgcolor=bgcol, bordercolor=bcol, borderwidth=1, borderpad=3,
+            row=3, col=1,
+        )
 
     leg_sz = 9 if compact else 11
     fig.update_layout(
