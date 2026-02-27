@@ -23,15 +23,75 @@ st.set_page_config(
 st.markdown("""
 <style>
     .block-container { padding-top: 1rem; }
-    .stMetric { background: #1e1e2e; border-radius: 8px; padding: 8px; }
-    .alert-box { padding: 10px 14px; border-radius: 6px; margin: 4px 0; font-size: 0.85rem; }
-    .alert-bull { background: #1a3a1a; border-left: 4px solid #00cc44; color: #80ff99; }
-    .alert-bear { background: #3a1a1a; border-left: 4px solid #ff3333; color: #ff9999; }
-    .alert-vol  { background: #1a2a3a; border-left: 4px solid #3399ff; color: #99ccff; }
-    .alert-info { background: #2a2a1a; border-left: 4px solid #ffcc00; color: #ffeeaa; }
-    .trend-bull { color: #00cc44; font-weight: bold; font-size: 1.2rem; }
-    .trend-bear { color: #ff3333; font-weight: bold; font-size: 1.2rem; }
-    .trend-side { color: #ffcc00; font-weight: bold; font-size: 1.2rem; }
+
+    /* ── Metric 卡片 ── */
+    [data-testid="stMetric"] {
+        background: #1e2235;
+        border-radius: 10px;
+        padding: 14px 16px;
+        border: 1px solid #2e3456;
+    }
+    [data-testid="stMetricLabel"] > div {
+        font-size: 1rem !important;
+        color: #aab4cc !important;
+        font-weight: 600;
+        letter-spacing: 0.03em;
+    }
+    [data-testid="stMetricValue"] > div {
+        font-size: 1.8rem !important;
+        color: #ffffff !important;
+        font-weight: 700;
+    }
+    [data-testid="stMetricDelta"] > div {
+        font-size: 1rem !important;
+        font-weight: 600;
+    }
+
+    /* ── EMA 數值列 ── */
+    .ema-bar {
+        background: #151825;
+        border-radius: 8px;
+        padding: 10px 16px;
+        margin: 6px 0 10px 0;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 14px;
+        border: 1px solid #252840;
+    }
+    .ema-item {
+        font-size: 0.95rem;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        white-space: nowrap;
+    }
+    .ema-label { opacity: 0.75; font-size: 0.82rem; }
+
+    /* ── 趨勢標籤 ── */
+    .trend-card {
+        background: #1e2235;
+        border-radius: 10px;
+        padding: 14px 16px;
+        border: 1px solid #2e3456;
+        text-align: center;
+    }
+    .trend-title { font-size: 1rem; color: #aab4cc; font-weight: 600; margin-bottom: 4px; }
+    .trend-bull { color: #00ee66; font-weight: 800; font-size: 1.6rem; }
+    .trend-bear { color: #ff4455; font-weight: 800; font-size: 1.6rem; }
+    .trend-side { color: #ffcc00; font-weight: 800; font-size: 1.6rem; }
+
+    /* ── 警示面板 ── */
+    .alert-box {
+        padding: 12px 16px;
+        border-radius: 8px;
+        margin: 5px 0;
+        font-size: 0.95rem;
+        font-weight: 500;
+        line-height: 1.5;
+    }
+    .alert-bull { background: #0d2e18; border-left: 5px solid #00ee66; color: #88ffbb; }
+    .alert-bear { background: #2e0d0d; border-left: 5px solid #ff4455; color: #ffaaaa; }
+    .alert-vol  { background: #0d1e38; border-left: 5px solid #44aaff; color: #aaddff; }
+    .alert-info { background: #28260d; border-left: 5px solid #ffcc00; color: #fff0aa; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -194,8 +254,11 @@ def build_chart(symbol, df, interval_label):
         shared_xaxes=True,
         row_heights=[0.55, 0.2, 0.25],
         vertical_spacing=0.02,
-        subplot_titles=(f"{symbol} K線圖 ({interval_label})", "成交量", "MACD"),
+        subplot_titles=(f"{symbol} K線圖 ({interval_label})", "成交量", "MACD (12, 26, 9)"),
     )
+    for ann in fig.layout.annotations:
+        ann.font.size = 15
+        ann.font.color = "#ccddee"
 
     # ── K線 ──
     fig.add_trace(go.Candlestick(
@@ -210,37 +273,49 @@ def build_chart(symbol, df, interval_label):
     for n, color in EMA_CONFIGS:
         fig.add_trace(go.Scatter(
             x=df.index, y=ema_series[n],
-            line=dict(color=color, width=1),
-            name=f"EMA{n}", opacity=0.85,
+            line=dict(color=color, width=1.5),
+            name=f"EMA{n}", opacity=0.9,
         ), row=1, col=1)
 
     # MA 線
     for n, color, dash in MA_CONFIGS:
         fig.add_trace(go.Scatter(
             x=df.index, y=ma_series[n],
-            line=dict(color=color, width=1.2, dash=dash),
+            line=dict(color=color, width=2, dash=dash),
             name=f"MA{n}",
         ), row=1, col=1)
 
     # 支撐阻力水平線
     if pivots_h:
         resist = max(p[1] for p in pivots_h)
-        fig.add_hline(y=resist, line=dict(color="#ff6666", dash="dash", width=1),
-                      annotation_text=f"阻力 {resist:.2f}", row=1, col=1)
+        fig.add_hline(y=resist, line=dict(color="#ff8888", dash="dash", width=1.5),
+                      annotation_text=f"⬛ 阻力 {resist:.2f}",
+                      annotation_font=dict(size=13, color="#ff8888"),
+                      annotation_bgcolor="rgba(30,10,10,0.7)",
+                      row=1, col=1)
     if pivots_l:
         support = min(p[1] for p in pivots_l)
-        fig.add_hline(y=support, line=dict(color="#66ff66", dash="dash", width=1),
-                      annotation_text=f"支撐 {support:.2f}", row=1, col=1)
+        fig.add_hline(y=support, line=dict(color="#88ff88", dash="dash", width=1.5),
+                      annotation_text=f"⬛ 支撐 {support:.2f}",
+                      annotation_font=dict(size=13, color="#88ff88"),
+                      annotation_bgcolor="rgba(10,30,10,0.7)",
+                      row=1, col=1)
 
     # 最高/最低標記
     max_idx = df["High"].idxmax()
     min_idx = df["Low"].idxmin()
     fig.add_annotation(x=max_idx, y=df["High"].max(),
-        text=f"最高 {df['High'].max():.2f}", showarrow=True,
-        arrowhead=2, arrowcolor="#ff4444", font=dict(color="#ff4444", size=10), row=1, col=1)
+        text=f"▲ 最高 {df['High'].max():.2f}", showarrow=True,
+        arrowhead=2, arrowcolor="#ff4444", arrowwidth=2,
+        font=dict(color="#ff8888", size=13, family="Arial Black"),
+        bgcolor="rgba(30,10,10,0.75)", bordercolor="#ff4444", borderwidth=1,
+        row=1, col=1)
     fig.add_annotation(x=min_idx, y=df["Low"].min(),
-        text=f"最低 {df['Low'].min():.2f}", showarrow=True,
-        arrowhead=2, arrowcolor="#00cc44", font=dict(color="#00cc44", size=10), row=1, col=1)
+        text=f"▼ 最低 {df['Low'].min():.2f}", showarrow=True,
+        arrowhead=2, arrowcolor="#00cc44", arrowwidth=2,
+        font=dict(color="#88ffaa", size=13, family="Arial Black"),
+        bgcolor="rgba(10,30,10,0.75)", bordercolor="#00cc44", borderwidth=1,
+        row=1, col=1)
 
     # ── 成交量 ──
     colors_vol = ["#ff4444" if c >= o else "#00cc44"
@@ -283,24 +358,36 @@ def build_chart(symbol, df, interval_label):
     for i in range(1, len(dif)):
         if dif.iloc[i] > dea.iloc[i] and dif.iloc[i-1] <= dea.iloc[i-1]:
             fig.add_annotation(x=dif.index[i], y=dif.iloc[i],
-                text="金叉", showarrow=False,
-                font=dict(color="#ffdd00", size=9), row=3, col=1)
+                text="⬆ 金叉", showarrow=True, arrowhead=2,
+                arrowcolor="#ffdd00", arrowwidth=2,
+                font=dict(color="#ffee55", size=12, family="Arial Black"),
+                bgcolor="rgba(30,28,0,0.75)", bordercolor="#ffdd00",
+                row=3, col=1)
         if dif.iloc[i] < dea.iloc[i] and dif.iloc[i-1] >= dea.iloc[i-1]:
             fig.add_annotation(x=dif.index[i], y=dif.iloc[i],
-                text="死叉", showarrow=False,
-                font=dict(color="#ff6666", size=9), row=3, col=1)
+                text="⬇ 死叉", showarrow=True, arrowhead=2,
+                arrowcolor="#ff6666", arrowwidth=2,
+                font=dict(color="#ff8888", size=12, family="Arial Black"),
+                bgcolor="rgba(30,0,0,0.75)", bordercolor="#ff6666",
+                row=3, col=1)
 
     fig.update_layout(
-        height=800,
+        height=860,
         template="plotly_dark",
         paper_bgcolor="#0e1117",
-        plot_bgcolor="#0e1117",
-        legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0, font=dict(size=10)),
-        margin=dict(l=10, r=10, t=40, b=10),
+        plot_bgcolor="#111520",
+        font=dict(family="Arial, sans-serif", size=13, color="#ccddee"),
+        legend=dict(
+            orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0,
+            font=dict(size=12, color="#ddeeff"),
+            bgcolor="rgba(14,17,23,0.7)",
+            bordercolor="#2e3456", borderwidth=1,
+        ),
+        margin=dict(l=12, r=12, t=50, b=10),
         xaxis_rangeslider_visible=False,
     )
-    fig.update_xaxes(showgrid=True, gridcolor="#2a2a3a")
-    fig.update_yaxes(showgrid=True, gridcolor="#2a2a3a")
+    fig.update_xaxes(showgrid=True, gridcolor="#1e2235", tickfont=dict(size=12))
+    fig.update_yaxes(showgrid=True, gridcolor="#1e2235", tickfont=dict(size=12))
 
     return fig
 
@@ -324,11 +411,6 @@ def render_symbol(symbol, interval_label, show_alerts):
 
     # 趨勢判斷
     trend = detect_trend(df)
-    trend_html = {
-        "多頭": '<span class="trend-bull">▲ 多頭</span>',
-        "空頭": '<span class="trend-bear">▼ 空頭</span>',
-        "盤整": '<span class="trend-side">◆ 盤整</span>',
-    }[trend]
 
     # 頂部指標列
     col1, col2, col3, col4, col5 = st.columns(5)
@@ -336,15 +418,32 @@ def render_symbol(symbol, interval_label, show_alerts):
     col2.metric("成交量 (萬股)", f"{vol_now/10000:.1f}")
     col3.metric("最高", f"${df['High'].iloc[-1]:.2f}")
     col4.metric("最低", f"${df['Low'].iloc[-1]:.2f}")
+    trend_class = {"多頭": "trend-bull", "空頭": "trend-bear", "盤整": "trend-side"}[trend]
+    trend_icon  = {"多頭": "▲", "空頭": "▼", "盤整": "◆"}[trend]
     with col5:
-        st.markdown(f"**趨勢判斷**<br>{trend_html}", unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="trend-card">'
+            f'<div class="trend-title">趨勢判斷</div>'
+            f'<div class="{trend_class}">{trend_icon} {trend}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
 
-    # EMA 數值列
-    ema_labels = []
+    # EMA 數值列（大字清晰版）
+    ema_items = []
     for n, color in EMA_CONFIGS:
         val = float(calc_ema(close, n).iloc[-1])
-        ema_labels.append(f'<span style="color:{color};font-size:0.8rem">EMA{n}: <b>{val:.2f}</b></span>')
-    st.markdown("　".join(ema_labels), unsafe_allow_html=True)
+        above = "↑" if last_close > val else "↓"
+        ema_items.append(
+            f'<span class="ema-item" style="color:{color}">'
+            f'<span class="ema-label">EMA{n} </span>{val:.2f} '
+            f'<span style="font-size:0.75rem;opacity:0.6">{above}</span>'
+            f'</span>'
+        )
+    st.markdown(
+        '<div class="ema-bar">' + "".join(ema_items) + '</div>',
+        unsafe_allow_html=True,
+    )
 
     # K線 + 成交量 + MACD 圖
     fig = build_chart(symbol, df, interval_label)
