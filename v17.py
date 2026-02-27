@@ -1,19 +1,3 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>完整程式碼 - 美股實時監控系統</title>
-</head>
-<body>
-<pre><code>
-# ====================== requirements.txt ======================
-streamlit>=1.32.0
-yfinance>=0.2.40
-pandas>=2.2.0
-numpy>=1.26.0
-plotly>=5.20.0
-requests>=2.31.0
-
 # ====================== app.py ======================
 import streamlit as st
 import yfinance as yf
@@ -366,6 +350,3 @@ if auto_refresh:
     st.rerun()
 
 st.caption("💡 提示：首次載入可能需等待 3~8 秒。資料來源 yfinance • 部署於 Streamlit Cloud 請記得設定 secrets.toml")
-</code></pre>
-</body>
-</html>
