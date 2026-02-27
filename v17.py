@@ -4,14 +4,13 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from datetime import datetime, timedelta
+from datetime import datetime
 import time
 import requests
-import csv
-import os
-import json
 
-# ── 頁面設定 ──────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# 頁面設定
+# ══════════════════════════════════════════════════════════════════════════════
 st.set_page_config(
     page_title="美股即時監控系統",
     page_icon="📈",
@@ -19,91 +18,99 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── CSS 美化 ──────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# CSS
+# ══════════════════════════════════════════════════════════════════════════════
 st.markdown("""
 <style>
     .block-container { padding-top: 1rem; }
 
-    /* ── Metric 卡片 ── */
+    /* Metric 卡片 */
     [data-testid="stMetric"] {
-        background: #1e2235;
-        border-radius: 10px;
-        padding: 14px 16px;
-        border: 1px solid #2e3456;
+        background: #1e2235; border-radius: 10px;
+        padding: 12px 14px; border: 1px solid #2e3456;
     }
     [data-testid="stMetricLabel"] > div {
-        font-size: 1rem !important;
-        color: #aab4cc !important;
-        font-weight: 600;
-        letter-spacing: 0.03em;
+        font-size: 0.9rem !important; color: #aab4cc !important;
+        font-weight: 600; letter-spacing: 0.03em;
     }
     [data-testid="stMetricValue"] > div {
-        font-size: 1.8rem !important;
-        color: #ffffff !important;
-        font-weight: 700;
+        font-size: 1.55rem !important; color: #ffffff !important; font-weight: 700;
     }
-    [data-testid="stMetricDelta"] > div {
-        font-size: 1rem !important;
-        font-weight: 600;
-    }
+    [data-testid="stMetricDelta"] > div { font-size: 0.9rem !important; font-weight: 600; }
 
-    /* ── EMA 數值列 ── */
+    /* EMA 數值列 */
     .ema-bar {
-        background: #151825;
-        border-radius: 8px;
-        padding: 10px 16px;
-        margin: 6px 0 10px 0;
-        display: flex;
-        flex-wrap: wrap;
-        gap: 14px;
-        border: 1px solid #252840;
+        background: #151825; border-radius: 8px; padding: 9px 14px;
+        margin: 6px 0 8px 0; display: flex; flex-wrap: wrap;
+        gap: 12px; border: 1px solid #252840;
     }
-    .ema-item {
-        font-size: 0.95rem;
-        font-weight: 600;
-        letter-spacing: 0.02em;
-        white-space: nowrap;
-    }
-    .ema-label { opacity: 0.75; font-size: 0.82rem; }
+    .ema-item { font-size: 0.9rem; font-weight: 600; white-space: nowrap; }
+    .ema-label { opacity: 0.7; font-size: 0.78rem; }
 
-    /* ── 趨勢標籤 ── */
+    /* 趨勢卡片 */
     .trend-card {
-        background: #1e2235;
-        border-radius: 10px;
-        padding: 14px 16px;
-        border: 1px solid #2e3456;
-        text-align: center;
+        background: #1e2235; border-radius: 10px;
+        padding: 12px 14px; border: 1px solid #2e3456; text-align: center;
     }
-    .trend-title { font-size: 1rem; color: #aab4cc; font-weight: 600; margin-bottom: 4px; }
-    .trend-bull { color: #00ee66; font-weight: 800; font-size: 1.6rem; }
-    .trend-bear { color: #ff4455; font-weight: 800; font-size: 1.6rem; }
-    .trend-side { color: #ffcc00; font-weight: 800; font-size: 1.6rem; }
+    .trend-title { font-size: 0.9rem; color: #aab4cc; font-weight: 600; margin-bottom: 4px; }
+    .trend-bull  { color: #00ee66; font-weight: 800; font-size: 1.45rem; }
+    .trend-bear  { color: #ff4455; font-weight: 800; font-size: 1.45rem; }
+    .trend-side  { color: #ffcc00; font-weight: 800; font-size: 1.45rem; }
 
-    /* ── 警示面板 ── */
-    .alert-box {
-        padding: 12px 16px;
-        border-radius: 8px;
-        margin: 5px 0;
-        font-size: 0.95rem;
-        font-weight: 500;
-        line-height: 1.5;
+    /* 多週期摘要列 */
+    .mtf-header {
+        background: #151825; border-radius: 10px; padding: 10px 16px;
+        margin: 4px 0; border: 1px solid #252840;
+        display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
     }
-    .alert-bull { background: #0d2e18; border-left: 5px solid #00ee66; color: #88ffbb; }
-    .alert-bear { background: #2e0d0d; border-left: 5px solid #ff4455; color: #ffaaaa; }
-    .alert-vol  { background: #0d1e38; border-left: 5px solid #44aaff; color: #aaddff; }
-    .alert-info { background: #28260d; border-left: 5px solid #ffcc00; color: #fff0aa; }
+    .mtf-period { font-size: 0.85rem; color: #aab4cc; font-weight: 700; min-width: 52px; }
+    .mtf-price  { font-size: 1.05rem; color: #ffffff; font-weight: 700; }
+    .mtf-chg-up { font-size: 0.88rem; color: #00ee66; font-weight: 600; }
+    .mtf-chg-dn { font-size: 0.88rem; color: #ff4455; font-weight: 600; }
+    .mtf-trend-bull { background:#0d2e18; color:#00ee66; border-radius:4px; padding:2px 8px; font-size:0.82rem; font-weight:700; }
+    .mtf-trend-bear { background:#2e0d0d; color:#ff4455; border-radius:4px; padding:2px 8px; font-size:0.82rem; font-weight:700; }
+    .mtf-trend-side { background:#28260d; color:#ffcc00; border-radius:4px; padding:2px 8px; font-size:0.82rem; font-weight:700; }
+    .mtf-macd-bull  { color:#00ee66; font-size:0.82rem; }
+    .mtf-macd-bear  { color:#ff4455; font-size:0.82rem; }
+    .mtf-ema-bull   { color:#00ee66; font-size:0.82rem; }
+    .mtf-ema-bear   { color:#ff4455; font-size:0.82rem; }
+    .mtf-divider    { height:28px; width:1px; background:#2e3456; flex-shrink:0; }
+
+    /* 區塊標題 */
+    .mtf-section-title {
+        font-size: 1.1rem; font-weight: 700; color: #ddeeff;
+        padding: 8px 0 4px 0; border-bottom: 2px solid #2e3456;
+        margin: 14px 0 8px 0;
+    }
+
+    /* 警示面板 */
+    .alert-box {
+        padding: 11px 16px; border-radius: 8px; margin: 4px 0;
+        font-size: 0.92rem; font-weight: 500; line-height: 1.5;
+    }
+    .alert-bull { background:#0d2e18; border-left:5px solid #00ee66; color:#88ffbb; }
+    .alert-bear { background:#2e0d0d; border-left:5px solid #ff4455; color:#ffaaaa; }
+    .alert-vol  { background:#0d1e38; border-left:5px solid #44aaff; color:#aaddff; }
+    .alert-info { background:#28260d; border-left:5px solid #ffcc00; color:#fff0aa; }
 </style>
 """, unsafe_allow_html=True)
 
-# ── 常數設定 ──────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# 常數
+# ══════════════════════════════════════════════════════════════════════════════
 INTERVAL_MAP = {
-    "1分鐘": "1m", "5分鐘": "5m", "15分鐘": "15m", "30分鐘": "30m",
-    "日K": "1d", "週K": "1wk", "月K": "1mo"
+    "1m":  ("1分鐘",  "1d"),
+    "5m":  ("5分鐘",  "5d"),
+    "15m": ("15分鐘", "10d"),
+    "30m": ("30分鐘", "30d"),
+    "1d":  ("日K",    "1y"),
+    "1wk": ("週K",    "3y"),
+    "1mo": ("月K",    "5y"),
 }
-PERIOD_MAP = {
-    "1m": "1d", "5m": "5d", "15m": "10d", "30m": "30d",
-    "1d": "1y", "1wk": "3y", "1mo": "5y"
-}
+ALL_INTERVALS   = list(INTERVAL_MAP.keys())
+INTERVAL_LABELS = {k: v[0] for k, v in INTERVAL_MAP.items()}
+
 EMA_CONFIGS = [
     (5,   "#00ff88"), (10,  "#ccff00"), (20,  "#ffaa00"),
     (30,  "#ff5500"), (40,  "#cc00ff"), (60,  "#0088ff"),
@@ -111,159 +118,159 @@ EMA_CONFIGS = [
 ]
 MA_CONFIGS = [(5, "#ffffff", "dash"), (15, "#ffdd66", "dot")]
 
-# ── 警示記錄 (session state) ─────────────────────────────────────────────────
-if "alert_log" not in st.session_state:
-    st.session_state.alert_log = []
-if "sent_alerts" not in st.session_state:
-    st.session_state.sent_alerts = set()
+# ══════════════════════════════════════════════════════════════════════════════
+# Session State
+# ══════════════════════════════════════════════════════════════════════════════
+if "alert_log"   not in st.session_state: st.session_state.alert_log   = []
+if "sent_alerts" not in st.session_state: st.session_state.sent_alerts = set()
 
-# ── Telegram 發送 ─────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# Telegram
+# ══════════════════════════════════════════════════════════════════════════════
 def send_telegram(msg: str):
     try:
         token   = st.secrets["TELEGRAM_BOT_TOKEN"]
         chat_id = st.secrets["TELEGRAM_CHAT_ID"]
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
-        requests.post(url, data={"chat_id": chat_id, "text": msg, "parse_mode": "HTML"}, timeout=5)
+        requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            data={"chat_id": chat_id, "text": msg, "parse_mode": "HTML"}, timeout=5,
+        )
     except Exception:
-        pass  # secrets 未設定時靜默忽略
+        pass
 
-def add_alert(symbol: str, msg: str, atype: str = "info"):
+def add_alert(symbol: str, period: str, msg: str, atype: str = "info"):
     now = datetime.now().strftime("%H:%M:%S")
-    entry = {"時間": now, "股票": symbol, "訊息": msg, "類型": atype}
-    key = f"{symbol}|{msg}"
+    key = f"{symbol}|{period}|{msg}"
     if key not in st.session_state.sent_alerts:
-        st.session_state.alert_log.insert(0, entry)
+        st.session_state.alert_log.insert(0,
+            {"時間": now, "股票": symbol, "週期": period, "訊息": msg, "類型": atype})
         st.session_state.alert_log = st.session_state.alert_log[:200]
         st.session_state.sent_alerts.add(key)
-        send_telegram(f"📊 [{symbol}] {msg}")
+        send_telegram(f"📊 [{symbol} {period}] {msg}")
 
-# ── 數據抓取 ──────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# 數據抓取
+# ══════════════════════════════════════════════════════════════════════════════
 @st.cache_data(ttl=60)
 def fetch_data(symbol: str, interval: str) -> pd.DataFrame:
-    period = PERIOD_MAP.get(interval, "1y")
-    df = yf.download(symbol, period=period, interval=interval, auto_adjust=True, progress=False)
-    if df.empty:
+    _, period = INTERVAL_MAP[interval]
+    try:
+        df = yf.download(symbol, period=period, interval=interval,
+                         auto_adjust=True, progress=False)
+        if df.empty:
+            return pd.DataFrame()
+        df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
+        df.dropna(inplace=True)
         return df
-    df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
-    df.dropna(inplace=True)
-    return df
+    except Exception:
+        return pd.DataFrame()
 
-# ── 技術指標計算 ──────────────────────────────────────────────────────────────
-def calc_ema(series, n):
-    return series.ewm(span=n, adjust=False).mean()
+# ══════════════════════════════════════════════════════════════════════════════
+# 技術指標
+# ══════════════════════════════════════════════════════════════════════════════
+def calc_ema(s, n):  return s.ewm(span=n, adjust=False).mean()
+def calc_ma(s, n):   return s.rolling(n).mean()
 
-def calc_ma(series, n):
-    return series.rolling(n).mean()
-
-def calc_macd(series, fast=12, slow=26, signal=9):
-    ema_fast = calc_ema(series, fast)
-    ema_slow = calc_ema(series, slow)
-    dif = ema_fast - ema_slow
-    dea = calc_ema(dif, signal)
-    hist = (dif - dea) * 2
-    return dif, dea, hist
+def calc_macd(s, fast=12, slow=26, sig=9):
+    dif  = calc_ema(s, fast) - calc_ema(s, slow)
+    dea  = calc_ema(dif, sig)
+    return dif, dea, (dif - dea) * 2
 
 def calc_pivot(df, left=5, right=5):
     highs, lows = [], []
-    close = df["Close"].values
-    high  = df["High"].values
-    low   = df["Low"].values
-    idx   = df.index
-    n = len(df)
-    for i in range(left, n - right):
-        if high[i] == max(high[i-left:i+right+1]):
-            highs.append((idx[i], high[i]))
-        if low[i]  == min(low[i-left:i+right+1]):
-            lows.append((idx[i], low[i]))
+    hi, lo, idx = df["High"].values, df["Low"].values, df.index
+    for i in range(left, len(df) - right):
+        if hi[i] == max(hi[i-left:i+right+1]): highs.append((idx[i], hi[i]))
+        if lo[i] == min(lo[i-left:i+right+1]): lows.append((idx[i], lo[i]))
     return highs, lows
 
 def detect_trend(df) -> str:
-    if len(df) < 200:
-        return "盤整"
-    ema5  = calc_ema(df["Close"], 5).iloc[-1]
-    ema20 = calc_ema(df["Close"], 20).iloc[-1]
-    ema60 = calc_ema(df["Close"], 60).iloc[-1]
-    ema200= calc_ema(df["Close"], 200).iloc[-1]
-    if ema5 > ema20 > ema60 > ema200:
-        return "多頭"
-    if ema5 < ema20 < ema60 < ema200:
-        return "空頭"
+    if len(df) < 60: return "盤整"
+    c = df["Close"]
+    e5, e20, e60 = calc_ema(c,5).iloc[-1], calc_ema(c,20).iloc[-1], calc_ema(c,60).iloc[-1]
+    e200 = calc_ema(c,200).iloc[-1] if len(df) >= 200 else None
+    if e200:
+        if e5>e20>e60>e200: return "多頭"
+        if e5<e20<e60<e200: return "空頭"
+    else:
+        if e5>e20>e60: return "多頭"
+        if e5<e20<e60: return "空頭"
     return "盤整"
 
-# ── 警示邏輯 ──────────────────────────────────────────────────────────────────
-def run_alerts(symbol, df):
-    if len(df) < 30:
-        return
-    close = df["Close"]
-    vol   = df["Volume"]
+def get_macd_signal(df) -> str:
+    if len(df) < 30: return "—"
+    dif, dea, _ = calc_macd(df["Close"])
+    if dif.iloc[-1] > dea.iloc[-1] and dif.iloc[-2] <= dea.iloc[-2]: return "⬆金叉"
+    if dif.iloc[-1] < dea.iloc[-1] and dif.iloc[-2] >= dea.iloc[-2]: return "⬇死叉"
+    return "DIF↑" if dif.iloc[-1] > dea.iloc[-1] else "DIF↓"
 
-    # MACD 金叉/死叉
+def get_ema_signal(df) -> str:
+    if len(df) < 20: return "—"
+    c = df["Close"]
+    e5, e20 = calc_ema(c,5), calc_ema(c,20)
+    if e5.iloc[-1] > e20.iloc[-1] and e5.iloc[-2] <= e20.iloc[-2]: return "多排↑"
+    if e5.iloc[-1] < e20.iloc[-1] and e5.iloc[-2] >= e20.iloc[-2]: return "空排↓"
+    return "EMA↑" if e5.iloc[-1] > e20.iloc[-1] else "EMA↓"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 警示邏輯
+# ══════════════════════════════════════════════════════════════════════════════
+def run_alerts(symbol, period_label, df):
+    if len(df) < 30: return
+    close, vol = df["Close"], df["Volume"]
+
     dif, dea, _ = calc_macd(close)
     if dif.iloc[-1] > dea.iloc[-1] and dif.iloc[-2] <= dea.iloc[-2]:
-        add_alert(symbol, "MACD 金叉 🟢", "bull")
+        add_alert(symbol, period_label, "MACD 金叉 🟢", "bull")
     if dif.iloc[-1] < dea.iloc[-1] and dif.iloc[-2] >= dea.iloc[-2]:
-        add_alert(symbol, "MACD 死叉 🔴", "bear")
+        add_alert(symbol, period_label, "MACD 死叉 🔴", "bear")
 
-    # EMA5 穿 EMA20
-    ema5  = calc_ema(close, 5)
-    ema20 = calc_ema(close, 20)
-    if ema5.iloc[-1] > ema20.iloc[-1] and ema5.iloc[-2] <= ema20.iloc[-2]:
-        add_alert(symbol, "EMA5 上穿 EMA20（多頭排列開始）⬆️", "bull")
-    if ema5.iloc[-1] < ema20.iloc[-1] and ema5.iloc[-2] >= ema20.iloc[-2]:
-        add_alert(symbol, "EMA5 下穿 EMA20（空頭排列開始）⬇️", "bear")
+    e5, e20 = calc_ema(close,5), calc_ema(close,20)
+    if e5.iloc[-1] > e20.iloc[-1] and e5.iloc[-2] <= e20.iloc[-2]:
+        add_alert(symbol, period_label, "EMA5 上穿 EMA20 ⬆️", "bull")
+    if e5.iloc[-1] < e20.iloc[-1] and e5.iloc[-2] >= e20.iloc[-2]:
+        add_alert(symbol, period_label, "EMA5 下穿 EMA20 ⬇️", "bear")
 
-    # 全 EMA 多頭排列
-    emas = [calc_ema(close, n).iloc[-1] for n, _ in EMA_CONFIGS]
+    emas = [calc_ema(close,n).iloc[-1] for n,_ in EMA_CONFIGS]
     if all(emas[i] > emas[i+1] for i in range(len(emas)-1)):
-        add_alert(symbol, "所有 EMA 多頭排列 🚀", "bull")
+        add_alert(symbol, period_label, "所有 EMA 多頭排列 🚀", "bull")
 
-    # 成交量暴增
     vol_ma5 = vol.rolling(5).mean().iloc[-1]
     if vol.iloc[-1] > vol_ma5 * 2:
-        add_alert(symbol, f"成交量暴增 {vol.iloc[-1]/vol_ma5:.1f}x 均量 📊", "vol")
+        add_alert(symbol, period_label, f"成交量暴增 {vol.iloc[-1]/vol_ma5:.1f}x 均量 📊", "vol")
 
-    # 支撐阻力突破
     pivots_h, pivots_l = calc_pivot(df.tail(60))
-    price = close.iloc[-1]
-    if pivots_h:
-        resist = max(p[1] for p in pivots_h)
-        if price > resist:
-            add_alert(symbol, f"突破阻力位 ${resist:.2f} ⚡", "bull")
-    if pivots_l:
-        support = min(p[1] for p in pivots_l)
-        if price < support:
-            add_alert(symbol, f"跌破支撐位 ${support:.2f} ⚠️", "bear")
+    price = float(close.iloc[-1])
+    if pivots_h and price > max(p[1] for p in pivots_h):
+        add_alert(symbol, period_label, f"突破阻力位 ${max(p[1] for p in pivots_h):.2f} ⚡", "bull")
+    if pivots_l and price < min(p[1] for p in pivots_l):
+        add_alert(symbol, period_label, f"跌破支撐位 ${min(p[1] for p in pivots_l):.2f} ⚠️", "bear")
 
-# ── 繪圖 ─────────────────────────────────────────────────────────────────────
-def build_chart(symbol, df, interval_label):
-    if df.empty:
-        return None
-
-    close = df["Close"]
-    vol   = df["Volume"]
-
-    # 計算所有指標
-    ema_series = {n: calc_ema(close, n) for n, _ in EMA_CONFIGS}
-    ma_series  = {n: calc_ma(close, n)  for n, _, _ in MA_CONFIGS}
+# ══════════════════════════════════════════════════════════════════════════════
+# 建立 K 線圖
+# ══════════════════════════════════════════════════════════════════════════════
+def build_chart(symbol, df, interval_label, compact=False):
+    if df.empty: return None
+    close, vol = df["Close"], df["Volume"]
+    ema_s = {n: calc_ema(close,n) for n,_ in EMA_CONFIGS}
+    ma_s  = {n: calc_ma(close,n)  for n,_,_ in MA_CONFIGS}
     dif, dea, hist = calc_macd(close)
     pivots_h, pivots_l = calc_pivot(df.tail(100))
 
-    # 建立子圖
+    chart_h = 520 if compact else 820
     fig = make_subplots(
-        rows=3, cols=1,
-        shared_xaxes=True,
-        row_heights=[0.55, 0.2, 0.25],
-        vertical_spacing=0.02,
-        subplot_titles=(f"{symbol} K線圖 ({interval_label})", "成交量", "MACD (12, 26, 9)"),
+        rows=3, cols=1, shared_xaxes=True,
+        row_heights=[0.56, 0.19, 0.25], vertical_spacing=0.02,
+        subplot_titles=(f"{symbol} ({interval_label})", "成交量", "MACD"),
     )
+    ann_size = 11 if compact else 13
     for ann in fig.layout.annotations:
-        ann.font.size = 15
+        ann.font.size  = ann_size
         ann.font.color = "#ccddee"
 
-    # ── K線 ──
+    # K 線
     fig.add_trace(go.Candlestick(
-        x=df.index,
-        open=df["Open"], high=df["High"], low=df["Low"], close=close,
+        x=df.index, open=df["Open"], high=df["High"], low=df["Low"], close=close,
         increasing_line_color="#ff4444", increasing_fillcolor="#ff4444",
         decreasing_line_color="#00cc44", decreasing_fillcolor="#00cc44",
         name="K線", showlegend=False,
@@ -272,197 +279,292 @@ def build_chart(symbol, df, interval_label):
     # EMA 線
     for n, color in EMA_CONFIGS:
         fig.add_trace(go.Scatter(
-            x=df.index, y=ema_series[n],
-            line=dict(color=color, width=1.5),
-            name=f"EMA{n}", opacity=0.9,
+            x=df.index, y=ema_s[n],
+            line=dict(color=color, width=1.3), name=f"EMA{n}", opacity=0.9,
         ), row=1, col=1)
 
     # MA 線
     for n, color, dash in MA_CONFIGS:
         fig.add_trace(go.Scatter(
-            x=df.index, y=ma_series[n],
-            line=dict(color=color, width=2, dash=dash),
-            name=f"MA{n}",
+            x=df.index, y=ma_s[n],
+            line=dict(color=color, width=1.8, dash=dash), name=f"MA{n}",
         ), row=1, col=1)
 
-    # 支撐阻力水平線
+    # 支撐阻力
     if pivots_h:
-        resist = max(p[1] for p in pivots_h)
-        fig.add_hline(y=resist, line=dict(color="#ff8888", dash="dash", width=1.5),
-                      annotation_text=f"⬛ 阻力 {resist:.2f}",
-                      annotation_font=dict(size=13, color="#ff8888"),
-                      annotation_bgcolor="rgba(30,10,10,0.7)",
-                      row=1, col=1)
+        r = max(p[1] for p in pivots_h)
+        fig.add_hline(y=r, line=dict(color="#ff8888", dash="dash", width=1.5),
+                      annotation_text=f"阻力 {r:.2f}",
+                      annotation_font=dict(size=12, color="#ff8888"),
+                      annotation_bgcolor="rgba(30,10,10,0.8)", row=1, col=1)
     if pivots_l:
-        support = min(p[1] for p in pivots_l)
-        fig.add_hline(y=support, line=dict(color="#88ff88", dash="dash", width=1.5),
-                      annotation_text=f"⬛ 支撐 {support:.2f}",
-                      annotation_font=dict(size=13, color="#88ff88"),
-                      annotation_bgcolor="rgba(10,30,10,0.7)",
-                      row=1, col=1)
+        s = min(p[1] for p in pivots_l)
+        fig.add_hline(y=s, line=dict(color="#88ff88", dash="dash", width=1.5),
+                      annotation_text=f"支撐 {s:.2f}",
+                      annotation_font=dict(size=12, color="#88ff88"),
+                      annotation_bgcolor="rgba(10,30,10,0.8)", row=1, col=1)
 
-    # 最高/最低標記
-    max_idx = df["High"].idxmax()
-    min_idx = df["Low"].idxmin()
+    # 最高最低
+    max_idx, min_idx = df["High"].idxmax(), df["Low"].idxmin()
     fig.add_annotation(x=max_idx, y=df["High"].max(),
-        text=f"▲ 最高 {df['High'].max():.2f}", showarrow=True,
+        text=f"▲ {df['High'].max():.2f}", showarrow=True,
         arrowhead=2, arrowcolor="#ff4444", arrowwidth=2,
-        font=dict(color="#ff8888", size=13, family="Arial Black"),
-        bgcolor="rgba(30,10,10,0.75)", bordercolor="#ff4444", borderwidth=1,
+        font=dict(color="#ff8888", size=11, family="Arial Black"),
+        bgcolor="rgba(30,10,10,0.85)", bordercolor="#ff4444", borderwidth=1,
         row=1, col=1)
     fig.add_annotation(x=min_idx, y=df["Low"].min(),
-        text=f"▼ 最低 {df['Low'].min():.2f}", showarrow=True,
+        text=f"▼ {df['Low'].min():.2f}", showarrow=True,
         arrowhead=2, arrowcolor="#00cc44", arrowwidth=2,
-        font=dict(color="#88ffaa", size=13, family="Arial Black"),
-        bgcolor="rgba(10,30,10,0.75)", bordercolor="#00cc44", borderwidth=1,
+        font=dict(color="#88ffaa", size=11, family="Arial Black"),
+        bgcolor="rgba(10,30,10,0.85)", bordercolor="#00cc44", borderwidth=1,
         row=1, col=1)
 
-    # ── 成交量 ──
-    colors_vol = ["#ff4444" if c >= o else "#00cc44"
-                  for c, o in zip(df["Close"], df["Open"])]
-    fig.add_trace(go.Bar(
-        x=df.index, y=vol, marker_color=colors_vol,
-        name="成交量", showlegend=False,
-    ), row=2, col=1)
-
-    # 均量線
+    # 成交量
+    col_vol = ["#ff4444" if c >= o else "#00cc44"
+               for c, o in zip(df["Close"], df["Open"])]
+    fig.add_trace(go.Bar(x=df.index, y=vol, marker_color=col_vol,
+                         name="成交量", showlegend=False), row=2, col=1)
     vol_ma5 = vol.rolling(5).mean()
-    fig.add_trace(go.Scatter(
-        x=df.index, y=vol_ma5,
-        line=dict(color="#ffaa00", width=1),
-        name="VOL MA5",
-    ), row=2, col=1)
-
-    # 異常放量標記
+    fig.add_trace(go.Scatter(x=df.index, y=vol_ma5,
+                              line=dict(color="#ffaa00", width=1.5), name="VOL MA5"), row=2, col=1)
     anomaly = vol > vol_ma5 * 2
-    fig.add_trace(go.Scatter(
-        x=df.index[anomaly], y=vol[anomaly],
-        mode="markers", marker=dict(color="#ff00ff", size=6, symbol="star"),
-        name="異常放量",
-    ), row=2, col=1)
+    if anomaly.any():
+        fig.add_trace(go.Scatter(
+            x=df.index[anomaly], y=vol[anomaly], mode="markers",
+            marker=dict(color="#ff00ff", size=7, symbol="star"), name="異常放量",
+        ), row=2, col=1)
 
-    # ── MACD ──
-    bar_colors = ["#ff4444" if v >= 0 else "#00cc44" for v in hist]
-    fig.add_trace(go.Bar(
-        x=df.index, y=hist, marker_color=bar_colors,
-        name="MACD柱", showlegend=False,
-    ), row=3, col=1)
-    fig.add_trace(go.Scatter(
-        x=df.index, y=dif, line=dict(color="#ffaa00", width=1.2), name="DIF",
-    ), row=3, col=1)
-    fig.add_trace(go.Scatter(
-        x=df.index, y=dea, line=dict(color="#0088ff", width=1.2), name="DEA",
-    ), row=3, col=1)
+    # MACD
+    bar_col = ["#ff4444" if v >= 0 else "#00cc44" for v in hist]
+    fig.add_trace(go.Bar(x=df.index, y=hist, marker_color=bar_col,
+                         name="MACD柱", showlegend=False), row=3, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=dif,
+                              line=dict(color="#ffaa00", width=1.5), name="DIF"), row=3, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=dea,
+                              line=dict(color="#0088ff", width=1.5), name="DEA"), row=3, col=1)
 
-    # 金叉/死叉標記
-    for i in range(1, len(dif)):
+    # 金叉死叉（最近 5 個）
+    cnt = 0
+    for i in range(len(dif)-1, 0, -1):
+        if cnt >= 5: break
         if dif.iloc[i] > dea.iloc[i] and dif.iloc[i-1] <= dea.iloc[i-1]:
-            fig.add_annotation(x=dif.index[i], y=dif.iloc[i],
-                text="⬆ 金叉", showarrow=True, arrowhead=2,
-                arrowcolor="#ffdd00", arrowwidth=2,
-                font=dict(color="#ffee55", size=12, family="Arial Black"),
-                bgcolor="rgba(30,28,0,0.75)", bordercolor="#ffdd00",
-                row=3, col=1)
-        if dif.iloc[i] < dea.iloc[i] and dif.iloc[i-1] >= dea.iloc[i-1]:
-            fig.add_annotation(x=dif.index[i], y=dif.iloc[i],
-                text="⬇ 死叉", showarrow=True, arrowhead=2,
-                arrowcolor="#ff6666", arrowwidth=2,
-                font=dict(color="#ff8888", size=12, family="Arial Black"),
-                bgcolor="rgba(30,0,0,0.75)", bordercolor="#ff6666",
-                row=3, col=1)
+            fig.add_annotation(x=dif.index[i], y=float(dif.iloc[i]),
+                text="⬆金叉", showarrow=True, arrowhead=2, arrowwidth=1.5,
+                arrowcolor="#ffdd00", font=dict(color="#ffee55", size=10, family="Arial Black"),
+                bgcolor="rgba(30,28,0,0.85)", bordercolor="#ffdd00", row=3, col=1)
+            cnt += 1
+        elif dif.iloc[i] < dea.iloc[i] and dif.iloc[i-1] >= dea.iloc[i-1]:
+            fig.add_annotation(x=dif.index[i], y=float(dif.iloc[i]),
+                text="⬇死叉", showarrow=True, arrowhead=2, arrowwidth=1.5,
+                arrowcolor="#ff6666", font=dict(color="#ff8888", size=10, family="Arial Black"),
+                bgcolor="rgba(30,0,0,0.85)", bordercolor="#ff6666", row=3, col=1)
+            cnt += 1
 
+    leg_sz = 9 if compact else 11
     fig.update_layout(
-        height=860,
-        template="plotly_dark",
-        paper_bgcolor="#0e1117",
-        plot_bgcolor="#111520",
-        font=dict(family="Arial, sans-serif", size=13, color="#ccddee"),
+        height=chart_h, template="plotly_dark",
+        paper_bgcolor="#0e1117", plot_bgcolor="#111520",
+        font=dict(family="Arial, sans-serif", size=11, color="#ccddee"),
         legend=dict(
             orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0,
-            font=dict(size=12, color="#ddeeff"),
-            bgcolor="rgba(14,17,23,0.7)",
-            bordercolor="#2e3456", borderwidth=1,
+            font=dict(size=leg_sz, color="#ddeeff"),
+            bgcolor="rgba(14,17,23,0.8)", bordercolor="#2e3456", borderwidth=1,
         ),
-        margin=dict(l=12, r=12, t=50, b=10),
+        margin=dict(l=8, r=8, t=40, b=6),
         xaxis_rangeslider_visible=False,
     )
-    fig.update_xaxes(showgrid=True, gridcolor="#1e2235", tickfont=dict(size=12))
-    fig.update_yaxes(showgrid=True, gridcolor="#1e2235", tickfont=dict(size=12))
-
+    fig.update_xaxes(showgrid=True, gridcolor="#1a1e30", tickfont=dict(size=10))
+    fig.update_yaxes(showgrid=True, gridcolor="#1a1e30", tickfont=dict(size=10))
     return fig
 
-# ── 渲染單一股票 ──────────────────────────────────────────────────────────────
-def render_symbol(symbol, interval_label, show_alerts):
-    interval = INTERVAL_MAP[interval_label]
-    with st.spinner(f"載入 {symbol} 數據中..."):
+# ══════════════════════════════════════════════════════════════════════════════
+# 多週期摘要列
+# ══════════════════════════════════════════════════════════════════════════════
+def render_mtf_summary(symbol, selected_intervals, show_alerts):
+    st.markdown(f'<div class="mtf-section-title">🔀 多週期總覽 — {symbol}</div>',
+                unsafe_allow_html=True)
+    rows = []
+    for itvl in selected_intervals:
+        label, _ = INTERVAL_MAP[itvl]
+        df = fetch_data(symbol, itvl)
+        if df.empty:
+            rows.append(
+                f'<div class="mtf-header"><span class="mtf-period">{label}</span>'
+                f'<span style="color:#555">數據載入失敗</span></div>')
+            continue
+
+        if show_alerts:
+            run_alerts(symbol, label, df)
+
+        close   = df["Close"]
+        last    = float(close.iloc[-1])
+        prev    = float(close.iloc[-2]) if len(close) > 1 else last
+        chg     = last - prev
+        pct     = chg / prev * 100 if prev else 0
+        hi      = float(df["High"].iloc[-1])
+        lo      = float(df["Low"].iloc[-1])
+        vol_k   = int(df["Volume"].iloc[-1]) // 10000
+
+        chg_cls   = "mtf-chg-up" if chg >= 0 else "mtf-chg-dn"
+        chg_arrow = "▲" if chg >= 0 else "▼"
+
+        trend     = detect_trend(df)
+        t_cls     = {"多頭":"mtf-trend-bull","空頭":"mtf-trend-bear","盤整":"mtf-trend-side"}[trend]
+        t_icon    = {"多頭":"▲","空頭":"▼","盤整":"◆"}[trend]
+
+        macd_s    = get_macd_signal(df)
+        macd_cls  = "mtf-macd-bull" if any(x in macd_s for x in ["金叉","↑"]) else "mtf-macd-bear"
+
+        ema_s     = get_ema_signal(df)
+        ema_cls   = "mtf-ema-bull" if any(x in ema_s for x in ["↑","多"]) else "mtf-ema-bear"
+
+        rows.append(
+            f'<div class="mtf-header">'
+            f'  <span class="mtf-period">{label}</span>'
+            f'  <div class="mtf-divider"></div>'
+            f'  <span class="mtf-price">${last:.2f}</span>'
+            f'  <span class="{chg_cls}">{chg_arrow} {chg:+.2f} ({pct:+.2f}%)</span>'
+            f'  <div class="mtf-divider"></div>'
+            f'  <span style="color:#6688aa;font-size:0.82rem">H:{hi:.2f}　L:{lo:.2f}　量:{vol_k}萬</span>'
+            f'  <div class="mtf-divider"></div>'
+            f'  <span class="{t_cls}">{t_icon} {trend}</span>'
+            f'  <div class="mtf-divider"></div>'
+            f'  <span class="{macd_cls}">MACD: {macd_s}</span>'
+            f'  <span class="{ema_cls}">EMA: {ema_s}</span>'
+            f'</div>'
+        )
+    st.markdown("".join(rows), unsafe_allow_html=True)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 多週期 K 線圖
+# ══════════════════════════════════════════════════════════════════════════════
+def render_mtf_charts(symbol, selected_intervals, layout_mode):
+    if not selected_intervals:
+        st.info("請至少選擇一個時間週期")
+        return
+    st.markdown(f'<div class="mtf-section-title">📊 多週期 K 線圖 — {symbol}</div>',
+                unsafe_allow_html=True)
+
+    if layout_mode == "並排（2欄）":
+        pairs = [selected_intervals[i:i+2] for i in range(0, len(selected_intervals), 2)]
+        for pair in pairs:
+            cols = st.columns(len(pair))
+            for col, itvl in zip(cols, pair):
+                label, _ = INTERVAL_MAP[itvl]
+                df = fetch_data(symbol, itvl)
+                with col:
+                    if df.empty:
+                        st.error(f"{label} 無數據")
+                    else:
+                        fig = build_chart(symbol, df, label, compact=True)
+                        if fig:
+                            st.plotly_chart(fig, use_container_width=True,
+                                            config={"displayModeBar": False},
+                                            key=f"mtf_{symbol}_{itvl}")
+    else:
+        for itvl in selected_intervals:
+            label, _ = INTERVAL_MAP[itvl]
+            df = fetch_data(symbol, itvl)
+            if df.empty:
+                st.error(f"{label} 無數據")
+            else:
+                fig = build_chart(symbol, df, label, compact=False)
+                if fig:
+                    st.plotly_chart(fig, use_container_width=True,
+                                    config={"displayModeBar": True},
+                                    key=f"mtf_{symbol}_{itvl}_full")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 單週期渲染
+# ══════════════════════════════════════════════════════════════════════════════
+def render_single(symbol, interval, show_alerts):
+    label, _ = INTERVAL_MAP[interval]
+    with st.spinner(f"載入 {symbol} {label} 數據中..."):
         df = fetch_data(symbol, interval)
 
-    if df is None or df.empty:
-        st.error(f"❌ 無法取得 {symbol} 數據，請確認代號是否正確。")
+    if df.empty:
+        st.error(f"❌ 無法取得 {symbol} 數據")
         return
 
-    # 計算當前值
-    close    = df["Close"]
-    last_close = float(close.iloc[-1])
-    last_open  = float(df["Open"].iloc[-1])
-    chg        = last_close - float(close.iloc[-2]) if len(close) > 1 else 0
-    chg_pct    = chg / float(close.iloc[-2]) * 100 if len(close) > 1 else 0
-    vol_now    = int(df["Volume"].iloc[-1])
+    close   = df["Close"]
+    last    = float(close.iloc[-1])
+    prev    = float(close.iloc[-2]) if len(close) > 1 else last
+    chg     = last - prev
+    pct     = chg / prev * 100 if prev else 0
+    vol_now = int(df["Volume"].iloc[-1])
+    trend   = detect_trend(df)
 
-    # 趨勢判斷
-    trend = detect_trend(df)
-
-    # 頂部指標列
-    col1, col2, col3, col4, col5 = st.columns(5)
-    col1.metric("最新價格", f"${last_close:.2f}", f"{chg:+.2f} ({chg_pct:+.2f}%)")
-    col2.metric("成交量 (萬股)", f"{vol_now/10000:.1f}")
-    col3.metric("最高", f"${df['High'].iloc[-1]:.2f}")
-    col4.metric("最低", f"${df['Low'].iloc[-1]:.2f}")
-    trend_class = {"多頭": "trend-bull", "空頭": "trend-bear", "盤整": "trend-side"}[trend]
-    trend_icon  = {"多頭": "▲", "空頭": "▼", "盤整": "◆"}[trend]
-    with col5:
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("最新價格",      f"${last:.2f}", f"{chg:+.2f} ({pct:+.2f}%)")
+    c2.metric("成交量（萬股）", f"{vol_now/10000:.1f}")
+    c3.metric("本K最高",       f"${df['High'].iloc[-1]:.2f}")
+    c4.metric("本K最低",       f"${df['Low'].iloc[-1]:.2f}")
+    t_cls  = {"多頭":"trend-bull","空頭":"trend-bear","盤整":"trend-side"}[trend]
+    t_icon = {"多頭":"▲","空頭":"▼","盤整":"◆"}[trend]
+    with c5:
         st.markdown(
-            f'<div class="trend-card">'
-            f'<div class="trend-title">趨勢判斷</div>'
-            f'<div class="{trend_class}">{trend_icon} {trend}</div>'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
+            f'<div class="trend-card"><div class="trend-title">趨勢判斷</div>'
+            f'<div class="{t_cls}">{t_icon} {trend}</div></div>',
+            unsafe_allow_html=True)
 
-    # EMA 數值列（大字清晰版）
-    ema_items = []
+    # EMA 列
+    items = []
     for n, color in EMA_CONFIGS:
-        val = float(calc_ema(close, n).iloc[-1])
-        above = "↑" if last_close > val else "↓"
-        ema_items.append(
+        val   = float(calc_ema(close,n).iloc[-1])
+        arrow = "↑" if last > val else "↓"
+        items.append(
             f'<span class="ema-item" style="color:{color}">'
-            f'<span class="ema-label">EMA{n} </span>{val:.2f} '
-            f'<span style="font-size:0.75rem;opacity:0.6">{above}</span>'
-            f'</span>'
-        )
-    st.markdown(
-        '<div class="ema-bar">' + "".join(ema_items) + '</div>',
-        unsafe_allow_html=True,
-    )
+            f'<span class="ema-label">EMA{n} </span>{val:.2f}'
+            f'<span style="font-size:0.72rem;opacity:0.6"> {arrow}</span></span>')
+    st.markdown('<div class="ema-bar">' + "".join(items) + '</div>',
+                unsafe_allow_html=True)
 
-    # K線 + 成交量 + MACD 圖
-    fig = build_chart(symbol, df, interval_label)
+    fig = build_chart(symbol, df, label)
     if fig:
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True})
+        st.plotly_chart(fig, use_container_width=True,
+                        config={"displayModeBar": True},
+                        key=f"single_{symbol}_{interval}")
 
-    # 警示
     if show_alerts:
-        run_alerts(symbol, df)
+        run_alerts(symbol, label, df)
 
-# ── Sidebar ──────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# Sidebar
+# ══════════════════════════════════════════════════════════════════════════════
 with st.sidebar:
     st.title("📈 美股監控系統")
     st.markdown("---")
 
     raw_input = st.text_area("股票代號（逗號分隔）", value="TSLA,AAPL,NVDA", height=80)
-    symbols = [s.strip().upper() for s in raw_input.replace("，", ",").split(",") if s.strip()]
+    symbols   = [s.strip().upper() for s in raw_input.replace("，",",").split(",") if s.strip()]
 
-    interval_label = st.selectbox("時間週期", list(INTERVAL_MAP.keys()), index=4)
+    st.markdown("---")
+    st.markdown("#### 📅 監控模式")
+    mode = st.radio("", ["單一週期", "多週期同時監控"], horizontal=True,
+                    label_visibility="collapsed")
+
+    if mode == "單一週期":
+        single_interval = st.selectbox(
+            "時間週期",
+            ALL_INTERVALS,
+            format_func=lambda x: INTERVAL_LABELS[x],
+            index=4,
+        )
+        layout_mode = None
+        selected    = []
+
+    else:
+        st.markdown("**勾選要同時顯示的週期：**")
+        selected    = []
+        defaults    = {"5m", "15m", "1d"}
+        left_col, right_col = st.columns(2)
+        for i, itvl in enumerate(ALL_INTERVALS):
+            col = left_col if i % 2 == 0 else right_col
+            if col.checkbox(INTERVAL_LABELS[itvl], value=(itvl in defaults), key=f"cb_{itvl}"):
+                selected.append(itvl)
+        st.markdown("")
+        layout_mode = st.radio("圖表排列方式",
+                               ["並排（2欄）", "堆疊（全寬）"], horizontal=True)
 
     st.markdown("---")
     auto_refresh = st.toggle("自動刷新", value=False)
@@ -472,45 +574,63 @@ with st.sidebar:
     show_alerts = st.toggle("啟用警示偵測", value=True)
 
     if st.button("🗑️ 清除警示記錄"):
-        st.session_state.alert_log = []
+        st.session_state.alert_log   = []
         st.session_state.sent_alerts = set()
         st.toast("警示記錄已清除")
 
     if st.session_state.alert_log:
-        csv_data = pd.DataFrame(st.session_state.alert_log).to_csv(index=False, encoding="utf-8-sig")
+        csv_data = pd.DataFrame(st.session_state.alert_log).to_csv(
+            index=False, encoding="utf-8-sig")
         st.download_button("📥 匯出警示 CSV", csv_data, "alerts.csv", "text/csv")
 
     st.markdown("---")
     st.caption("數據來源：Yahoo Finance\n\n⚠️ 僅供參考，不構成投資建議")
 
-# ── 主區域：Tab 切換 ──────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# 主區域
+# ══════════════════════════════════════════════════════════════════════════════
 st.title("🇺🇸 美股即時監控系統")
 
 if not symbols:
     st.info("請在左側輸入股票代號")
     st.stop()
 
-tabs = st.tabs([f"📊 {s}" for s in symbols])
-for tab, symbol in zip(tabs, symbols):
-    with tab:
-        render_symbol(symbol, interval_label, show_alerts)
+stock_tabs = st.tabs([f"📊 {s}" for s in symbols])
 
-# ── 警示面板 ──────────────────────────────────────────────────────────────────
+for tab, symbol in zip(stock_tabs, symbols):
+    with tab:
+        if mode == "單一週期":
+            render_single(symbol, single_interval, show_alerts)
+
+        else:
+            if not selected:
+                st.warning("⚠️ 請在左側至少勾選一個時間週期")
+            else:
+                # ① 多週期摘要
+                render_mtf_summary(symbol, selected, show_alerts)
+                st.markdown("---")
+                # ② 多週期 K 線圖
+                render_mtf_charts(symbol, selected, layout_mode)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 警示面板
+# ══════════════════════════════════════════════════════════════════════════════
 if st.session_state.alert_log:
     st.markdown("---")
     st.subheader("🔔 警示訊息記錄")
-    type_map = {
-        "bull": "alert-bull", "bear": "alert-bear",
-        "vol": "alert-vol",   "info": "alert-info",
-    }
-    for entry in st.session_state.alert_log[:30]:
-        cls = type_map.get(entry["類型"], "alert-info")
+    cls_map = {"bull":"alert-bull","bear":"alert-bear","vol":"alert-vol","info":"alert-info"}
+    for e in st.session_state.alert_log[:40]:
+        cls    = cls_map.get(e["類型"], "alert-info")
+        p_tag  = f'【{e["週期"]}】' if e.get("週期") else ""
         st.markdown(
-            f'<div class="alert-box {cls}">🕐 {entry["時間"]}　【{entry["股票"]}】　{entry["訊息"]}</div>',
-            unsafe_allow_html=True,
-        )
+            f'<div class="alert-box {cls}">'
+            f'🕐 {e["時間"]}　【{e["股票"]}】{p_tag}　{e["訊息"]}'
+            f'</div>',
+            unsafe_allow_html=True)
 
-# ── 自動刷新 ──────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# 自動刷新
+# ══════════════════════════════════════════════════════════════════════════════
 if auto_refresh:
     time.sleep(refresh_sec)
     st.cache_data.clear()
