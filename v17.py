@@ -176,12 +176,41 @@ def calc_macd(s, fast=12, slow=26, sig=9):
     dea  = calc_ema(dif, sig)
     return dif, dea, (dif - dea) * 2
 
-def calc_pivot(df, left=5, right=5):
+def calc_pivot(df, interval: str = "1d"):
+    """
+    依週期動態調整掃描參數，並用「價格合理範圍過濾（±30%）」
+    確保阻力/支撐位一定在當前價格附近，不出現歷史舊極值。
+    """
+    # 依週期決定 left、right、掃描的最近 N 根 K 線
+    pivot_cfg = {
+        "1m":  (3, 3, 120),
+        "5m":  (3, 3, 100),
+        "15m": (3, 3, 80),
+        "30m": (3, 3, 60),
+        "1d":  (5, 5, 60),
+        "1wk": (3, 3, 40),
+        "1mo": (2, 2, 24),   # 月K只看近24根(2年)，避免抓到5年前低點
+    }
+    left, right, tail_n = pivot_cfg.get(interval, (3, 3, 60))
+
+    sub = df.tail(tail_n)
+    if len(sub) < left + right + 2:
+        return [], []
+
+    hi, lo, idx = sub["High"].values, sub["Low"].values, sub.index
+    current_price = float(df["Close"].iloc[-1])
+
+    # 只接受距離當前價格 ±30% 以內的 pivot（過濾歷史遠古價位）
+    price_lo = current_price * 0.70
+    price_hi = current_price * 1.30
+
     highs, lows = [], []
-    hi, lo, idx = df["High"].values, df["Low"].values, df.index
-    for i in range(left, len(df) - right):
-        if hi[i] == max(hi[i-left:i+right+1]): highs.append((idx[i], hi[i]))
-        if lo[i] == min(lo[i-left:i+right+1]): lows.append((idx[i], lo[i]))
+    for i in range(left, len(sub) - right):
+        if hi[i] == max(hi[i-left:i+right+1]) and price_lo <= hi[i] <= price_hi:
+            highs.append((idx[i], float(hi[i])))
+        if lo[i] == min(lo[i-left:i+right+1]) and price_lo <= lo[i] <= price_hi:
+            lows.append((idx[i], float(lo[i])))
+
     return highs, lows
 
 def detect_trend(df) -> str:
@@ -239,12 +268,23 @@ def run_alerts(symbol, period_label, df):
     if vol.iloc[-1] > vol_ma5 * 2:
         add_alert(symbol, period_label, f"成交量暴增 {vol.iloc[-1]/vol_ma5:.1f}x 均量 📊", "vol")
 
-    pivots_h, pivots_l = calc_pivot(df.tail(60))
-    price = float(close.iloc[-1])
-    if pivots_h and price > max(p[1] for p in pivots_h):
-        add_alert(symbol, period_label, f"突破阻力位 ${max(p[1] for p in pivots_h):.2f} ⚡", "bull")
-    if pivots_l and price < min(p[1] for p in pivots_l):
-        add_alert(symbol, period_label, f"跌破支撐位 ${min(p[1] for p in pivots_l):.2f} ⚠️", "bear")
+    # 支撐/阻力突破警示（含週期參數 + 價格合理性過濾）
+    itvl_key = {v[0]: k for k, v in INTERVAL_MAP.items()}.get(period_label, "1d")
+    pivots_h, pivots_l = calc_pivot(df, interval=itvl_key)
+    price      = float(close.iloc[-1])
+    prev_price = float(close.iloc[-2]) if len(close) > 1 else price
+
+    if pivots_h:
+        # 取「剛被突破」的阻力位：prev <= resist < price（由下往上突破）
+        broken = [p[1] for p in pivots_h if prev_price <= p[1] < price]
+        if broken:
+            add_alert(symbol, period_label, f"突破阻力位 ${max(broken):.2f} ⚡", "bull")
+
+    if pivots_l:
+        # 取「剛被跌破」的支撐位：price < support <= prev（由上往下跌破）
+        broken = [p[1] for p in pivots_l if price < p[1] <= prev_price]
+        if broken:
+            add_alert(symbol, period_label, f"跌破支撐位 ${min(broken):.2f} ⚠️", "bear")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 建立 K 線圖
@@ -255,7 +295,9 @@ def build_chart(symbol, df, interval_label, compact=False):
     ema_s = {n: calc_ema(close,n) for n,_ in EMA_CONFIGS}
     ma_s  = {n: calc_ma(close,n)  for n,_,_ in MA_CONFIGS}
     dif, dea, hist = calc_macd(close)
-    pivots_h, pivots_l = calc_pivot(df.tail(100))
+    # 依週期決定阻力/支撐，interval_label e.g. '日K'
+    itvl_code = {v[0]: k for k, v in INTERVAL_MAP.items()}.get(interval_label, "1d")
+    pivots_h, pivots_l = calc_pivot(df, interval=itvl_code)
 
     chart_h = 520 if compact else 820
     fig = make_subplots(
