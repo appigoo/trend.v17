@@ -301,7 +301,7 @@ def build_chart(symbol, df, interval_label, compact=False):
     dif_full, dea_full, hist_full = calc_macd(close_full)
 
     # 截取最後 90 根用於繪圖
-    df   = df.tail(MAX_BARS)
+    df   = df.tail(MAX_BARS).copy()
     close, vol = df["Close"], df["Volume"]
     ema_s = {n: s.tail(MAX_BARS) for n, s in ema_s_full.items()}
     ma_s  = {n: s.tail(MAX_BARS) for n, s in ma_s_full.items()}
@@ -309,9 +309,17 @@ def build_chart(symbol, df, interval_label, compact=False):
     dea   = dea_full.tail(MAX_BARS)
     hist  = hist_full.tail(MAX_BARS)
 
-    # 支撐阻力用截取後的資料（已含 ±30% 過濾）
+    # 支撐阻力用截取後的資料
     itvl_code = {v[0]: k for k, v in INTERVAL_MAP.items()}.get(interval_label, "1d")
     pivots_h, pivots_l = calc_pivot(df, interval=itvl_code)
+
+    # ── 消除休市空白：把 DatetimeIndex 轉成字串當 category label ──────────
+    # Plotly category 軸只顯示實際存在的類別，自動跳過休市間隙
+    intraday = interval_label in {"1分鐘","5分鐘","15分鐘","30分鐘"}
+    fmt = "%m/%d %H:%M" if intraday else "%y/%m/%d"
+    xlabels = [t.strftime(fmt) for t in df.index]
+    # 所有 series 也配對成同樣的字串 index，確保對齊
+    vol_ma5 = vol.rolling(5).mean()
 
     chart_h = 520 if compact else 820
     fig = make_subplots(
@@ -326,7 +334,7 @@ def build_chart(symbol, df, interval_label, compact=False):
 
     # K 線
     fig.add_trace(go.Candlestick(
-        x=df.index, open=df["Open"], high=df["High"], low=df["Low"], close=close,
+        x=xlabels, open=df["Open"], high=df["High"], low=df["Low"], close=close,
         increasing_line_color="#ff4444", increasing_fillcolor="#ff4444",
         decreasing_line_color="#00cc44", decreasing_fillcolor="#00cc44",
         name="K線", showlegend=False,
@@ -335,14 +343,14 @@ def build_chart(symbol, df, interval_label, compact=False):
     # EMA 線
     for n, color in EMA_CONFIGS:
         fig.add_trace(go.Scatter(
-            x=df.index, y=ema_s[n],
+            x=xlabels, y=ema_s[n],
             line=dict(color=color, width=1.3), name=f"EMA{n}", opacity=0.9,
         ), row=1, col=1)
 
     # MA 線
     for n, color, dash in MA_CONFIGS:
         fig.add_trace(go.Scatter(
-            x=df.index, y=ma_s[n],
+            x=xlabels, y=ma_s[n],
             line=dict(color=color, width=1.8, dash=dash), name=f"MA{n}",
         ), row=1, col=1)
 
@@ -361,14 +369,15 @@ def build_chart(symbol, df, interval_label, compact=False):
                       annotation_bgcolor="rgba(10,30,10,0.8)", row=1, col=1)
 
     # 最高最低
-    max_idx, min_idx = df["High"].idxmax(), df["Low"].idxmin()
-    fig.add_annotation(x=max_idx, y=df["High"].max(),
+    max_pos = int(df["High"].values.argmax())
+    min_pos = int(df["Low"].values.argmin())
+    fig.add_annotation(x=xlabels[max_pos], y=float(df["High"].max()),
         text=f"▲ {df['High'].max():.2f}", showarrow=True,
         arrowhead=2, arrowcolor="#ff4444", arrowwidth=2,
         font=dict(color="#ff8888", size=11, family="Arial Black"),
         bgcolor="rgba(30,10,10,0.85)", bordercolor="#ff4444", borderwidth=1,
         row=1, col=1)
-    fig.add_annotation(x=min_idx, y=df["Low"].min(),
+    fig.add_annotation(x=xlabels[min_pos], y=float(df["Low"].min()),
         text=f"▼ {df['Low'].min():.2f}", showarrow=True,
         arrowhead=2, arrowcolor="#00cc44", arrowwidth=2,
         font=dict(color="#88ffaa", size=11, family="Arial Black"),
@@ -378,10 +387,10 @@ def build_chart(symbol, df, interval_label, compact=False):
     # ── 成交量 ──────────────────────────────────────────────────────────────
     col_vol = ["#ff4444" if c >= o else "#00cc44"
                for c, o in zip(df["Close"], df["Open"])]
-    fig.add_trace(go.Bar(x=df.index, y=vol, marker_color=col_vol,
+    fig.add_trace(go.Bar(x=xlabels, y=vol, marker_color=col_vol,
                          name="成交量", showlegend=False), row=2, col=1)
     vol_ma5 = vol.rolling(5).mean()
-    fig.add_trace(go.Scatter(x=df.index, y=vol_ma5,
+    fig.add_trace(go.Scatter(x=xlabels, y=vol_ma5,
                               line=dict(color="#ffaa00", width=1.5), name="VOL MA5"), row=2, col=1)
 
     # 異常放量：只標記「最顯著的幾根」，用柱子邊框高亮 + 頂部小鑽石
@@ -405,7 +414,7 @@ def build_chart(symbol, df, interval_label, compact=False):
             seg_vals = vol.values[g0:g1+1]
             rep_pos.append(g0 + int(seg_vals.argmax()))
 
-        rep_x    = [df.index[p] for p in rep_pos]
+        rep_x    = [xlabels[p]  for p in rep_pos]
         rep_vol  = [float(vol.values[p])    for p in rep_pos]
         rep_ma   = [float(vol_ma5.values[p]) if not np.isnan(vol_ma5.values[p]) else 1
                     for p in rep_pos]
@@ -425,11 +434,11 @@ def build_chart(symbol, df, interval_label, compact=False):
 
     # ── MACD ────────────────────────────────────────────────────────────────
     bar_col = ["#ff4444" if v >= 0 else "#00cc44" for v in hist]
-    fig.add_trace(go.Bar(x=df.index, y=hist, marker_color=bar_col,
+    fig.add_trace(go.Bar(x=xlabels, y=hist, marker_color=bar_col,
                          name="MACD柱", showlegend=False), row=3, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=dif,
+    fig.add_trace(go.Scatter(x=xlabels, y=dif,
                               line=dict(color="#ffaa00", width=1.5), name="DIF"), row=3, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=dea,
+    fig.add_trace(go.Scatter(x=xlabels, y=dea,
                               line=dict(color="#0088ff", width=1.5), name="DEA"), row=3, col=1)
 
     # ── 金叉/死叉（智能去擁擠）────────────────────────────────────────────
@@ -461,7 +470,7 @@ def build_chart(symbol, df, interval_label, compact=False):
     base_px = 38 if compact else 46
 
     for seq, (pos, ctype) in enumerate(filtered):
-        x_val  = dif.index[pos]
+        x_val  = xlabels[pos]
         y_val  = float(dif.iloc[pos])
         extra  = 1 + (seq % 2) * 0.45    # 偶數序號偏移更遠，水平錯開
         if ctype == "gold":
@@ -484,7 +493,24 @@ def build_chart(symbol, df, interval_label, compact=False):
         )
 
     leg_sz = 8 if compact else 11
-    # compact 模式：圖例只顯示關鍵線，縮短 margin
+
+    # ── x 軸刻度標籤：依週期選擇合適格式 ─────────────────────────────────
+    # 日K以下用日期+時間，日K及以上只用日期
+    intraday_intervals = {"1分鐘","5分鐘","15分鐘","30分鐘"}
+    if interval_label in intraday_intervals:
+        tick_fmt = "%m/%d %H:%M"
+        # 每隔幾根顯示一個刻度，避免密集
+        n_ticks  = 8
+    else:
+        tick_fmt = "%Y/%m/%d"
+        n_ticks  = 8
+
+    # 用整數位置作為 x 軸刻度位置（category 模式下 x 軸是 0,1,2,...）
+    total   = len(df)
+    step    = max(1, total // n_ticks)
+    tick_positions = list(range(0, total, step))
+    tick_labels    = [df.index[i].strftime(tick_fmt) for i in tick_positions]
+
     fig.update_layout(
         height=chart_h, template="plotly_dark",
         paper_bgcolor="#0e1117", plot_bgcolor="#111520",
@@ -498,9 +524,26 @@ def build_chart(symbol, df, interval_label, compact=False):
         ),
         margin=dict(l=6, r=6, t=36 if compact else 44, b=4),
         xaxis_rangeslider_visible=False,
+        # category 類型：plotly 只顯示有數據的 bar，自動跳過休市空白
+        xaxis_type="category",
+        xaxis2_type="category",
+        xaxis3_type="category",
     )
-    fig.update_xaxes(showgrid=True, gridcolor="#1a1e30",
-                     tickfont=dict(size=9 if compact else 10))
+
+    # 套用自訂刻度到所有 x 軸
+    for axis_name in ["xaxis", "xaxis2", "xaxis3"]:
+        fig.update_layout(**{
+            axis_name: dict(
+                type="category",
+                showgrid=True, gridcolor="#1a1e30",
+                tickfont=dict(size=9 if compact else 10),
+                tickmode="array",
+                tickvals=tick_positions,
+                ticktext=tick_labels,
+                tickangle=-35,
+            )
+        })
+
     fig.update_yaxes(showgrid=True, gridcolor="#1a1e30",
                      tickfont=dict(size=9 if compact else 10))
     return fig
