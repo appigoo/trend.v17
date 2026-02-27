@@ -289,12 +289,12 @@ def run_alerts(symbol, period_label, df):
 # ══════════════════════════════════════════════════════════════════════════════
 # 建立 K 線圖
 # ══════════════════════════════════════════════════════════════════════════════
-def build_chart(symbol, df, interval_label, compact=False):
+def build_chart(symbol, df, interval_label, compact=False, max_bars=90):
     if df.empty: return None
 
     # ── 限制最多顯示 90 根 K 線，避免圖表擁擠 ──
     # EMA/MACD 用完整數據計算（保留歷史），再截取最後 90 根顯示
-    MAX_BARS = 90
+    MAX_BARS = max(10, int(max_bars))   # 使用者自訂，最少10根
     close_full, vol_full = df["Close"], df["Volume"]
     ema_s_full = {n: calc_ema(close_full, n) for n, _ in EMA_CONFIGS}
     ma_s_full  = {n: calc_ma(close_full,  n) for n, _, _ in MA_CONFIGS}
@@ -609,7 +609,7 @@ def render_mtf_summary(symbol, selected_intervals, show_alerts):
 # ══════════════════════════════════════════════════════════════════════════════
 # 多週期 K 線圖
 # ══════════════════════════════════════════════════════════════════════════════
-def render_mtf_charts(symbol, selected_intervals, layout_mode):
+def render_mtf_charts(symbol, selected_intervals, layout_mode, max_bars=90):
     if not selected_intervals:
         st.info("請至少選擇一個時間週期")
         return
@@ -627,7 +627,7 @@ def render_mtf_charts(symbol, selected_intervals, layout_mode):
                     if df.empty:
                         st.error(f"{label} 無數據")
                     else:
-                        fig = build_chart(symbol, df, label, compact=True)
+                        fig = build_chart(symbol, df, label, compact=True, max_bars=max_bars)
                         if fig:
                             st.plotly_chart(fig, use_container_width=True,
                                             config={"displayModeBar": False},
@@ -639,7 +639,7 @@ def render_mtf_charts(symbol, selected_intervals, layout_mode):
             if df.empty:
                 st.error(f"{label} 無數據")
             else:
-                fig = build_chart(symbol, df, label, compact=False)
+                fig = build_chart(symbol, df, label, compact=False, max_bars=max_bars)
                 if fig:
                     st.plotly_chart(fig, use_container_width=True,
                                     config={"displayModeBar": True},
@@ -648,7 +648,7 @@ def render_mtf_charts(symbol, selected_intervals, layout_mode):
 # ══════════════════════════════════════════════════════════════════════════════
 # 單週期渲染
 # ══════════════════════════════════════════════════════════════════════════════
-def render_single(symbol, interval, show_alerts):
+def render_single(symbol, interval, show_alerts, max_bars=90):
     label, _ = INTERVAL_MAP[interval]
     with st.spinner(f"載入 {symbol} {label} 數據中..."):
         df = fetch_data(symbol, interval)
@@ -690,7 +690,7 @@ def render_single(symbol, interval, show_alerts):
     st.markdown('<div class="ema-bar">' + "".join(items) + '</div>',
                 unsafe_allow_html=True)
 
-    fig = build_chart(symbol, df, label)
+    fig = build_chart(symbol, df, label, max_bars=max_bars)
     if fig:
         st.plotly_chart(fig, use_container_width=True,
                         config={"displayModeBar": True},
@@ -742,6 +742,14 @@ with st.sidebar:
     refresh_sec  = st.slider("刷新間隔（秒）", 60, 300, 60, step=30, disabled=not auto_refresh)
 
     st.markdown("---")
+    st.markdown("**📊 K 線顯示根數**")
+    max_bars = st.number_input(
+        "每張圖最多顯示幾根 K 線",
+        min_value=20, max_value=500, value=90, step=10,
+        help="建議：分鐘圖 60-120 根，日K 60-90 根，週K/月K 40-60 根",
+    )
+
+    st.markdown("---")
     show_alerts = st.toggle("啟用警示偵測", value=True)
 
     if st.button("🗑️ 清除警示記錄"):
@@ -771,7 +779,7 @@ stock_tabs = st.tabs([f"📊 {s}" for s in symbols])
 for tab, symbol in zip(stock_tabs, symbols):
     with tab:
         if mode == "單一週期":
-            render_single(symbol, single_interval, show_alerts)
+            render_single(symbol, single_interval, show_alerts, max_bars=max_bars)
 
         else:
             if not selected:
@@ -781,7 +789,7 @@ for tab, symbol in zip(stock_tabs, symbols):
                 render_mtf_summary(symbol, selected, show_alerts)
                 st.markdown("---")
                 # ② 多週期 K 線圖
-                render_mtf_charts(symbol, selected, layout_mode)
+                render_mtf_charts(symbol, selected, layout_mode, max_bars=max_bars)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 警示面板
